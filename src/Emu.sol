@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { Math } from "./library/Math.sol";
+
 struct SliceData {
-  //pack struct?
+  //pack struct? do later
+  // User nominal deposit = baseDeposit * index
   uint256 depositIndex;
   uint256 totalBaseDeposit;
   uint256 debtIndex;
@@ -19,6 +22,7 @@ contract Emu {
 
   uint256[] public createdSlices; // Array of prices of slices that have been creted
 
+  // (currentIndex - userIndex) * base deposit = amount owed
   uint256 public claimableCollateralIndex;
   uint256 public claimableDebtTokenIndex;
 
@@ -72,5 +76,5 @@ contract Emu {
   // just deposit collateral or just borrow
   // repay loan
   // liquidate
-  // accural interest
+  // Claim stuff
 }
