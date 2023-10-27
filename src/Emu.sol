@@ -9,8 +9,26 @@ struct SliceData {
   uint256 totalBaseDeposit;
   uint256 debtIndex;
   uint256 totalBaseDebt;
+  uint256 totalCollateralDeposit;
   uint256 depositEpoch;
   uint256 lastUpdate;
+}
+
+struct UserClaimableData {
+  uint256 claimableCollateralIndex;
+  uint256 claimableCollateralAmount;
+  uint256 claimableDebtTokenIndex;
+  uint256 claimableDebtTokenAmount;
+}
+
+struct UserLendingData {
+  uint256 baseAmount;
+  uint256 epoch;
+}
+
+struct UserBorrowingData {
+  uint256 debtBaseAmount;
+  uint256 collateralDeposit;
 }
 
 contract Emu {
@@ -22,42 +40,33 @@ contract Emu {
   address immutable DEBT_TOKEN;
 
   uint256[] public createdSlices;
+  mapping(uint256 price => SliceData sliceData) private slices;
 
   uint256 public claimableCollateralIndex;
   uint256 public claimableDebtTokenIndex;
 
-  mapping(uint256 price => SliceData sliceData) private slices;
-  mapping(address user => mapping(uint256 slice => uint256 baseAmount)) private
-    lenderDeposits;
-  mapping(address user => mapping(uint256 slice => uint256 epoch)) private lenderEpoch;
-  mapping(address user => mapping(uint256 slice => uint256 baseAmount)) private
-    borrowerDebts;
-  mapping(address user => mapping(uint256 slice => uint256 amount)) private
-    collateralDeposits;
-  // struct instead of so many mappings??
-  mapping(address user => mapping(uint256 slice => uint256 amount)) private
-    userClaimableCollateralIndex;
-  mapping(address user => mapping(uint256 slice => uint256 amount)) private
-    userClaimableCollateralAmount;
-  mapping(address user => mapping(uint256 slice => uint256 amount)) private
-    userClaimableDebtTokenIndex;
-  mapping(address user => mapping(uint256 slice => uint256 amount)) private
-    userClaimableDebtTokenAmount;
+  mapping(address user => mapping(uint256 slice => UserLendingData data)) private
+    userLendingData;
+  mapping(address user => mapping(uint256 slice => UserBorrowingData data)) private
+    userBorrowingData;
+  mapping(address user => mapping(uint256 slice => UserClaimableData data)) private
+    userClaimableData;
 
   function depositDebtTokens(uint256 _slice, uint256 _amount) external {
     _accureInterest(_slice);
     // user claimable amount
 
     SliceData memory cachedSliceData = slices[_slice];
+    UserLendingData storage userData = userLendingData[msg.sender][_slice];
 
-    if (lenderEpoch[msg.sender][_slice] < cachedSliceData.depositEpoch) {
-      lenderDeposits[msg.sender][_slice] = 0;
-      lenderEpoch[msg.sender][_slice] = cachedSliceData.depositEpoch;
+    if (userData.epoch < cachedSliceData.depositEpoch) {
+      userData.baseAmount = 0;
+      userData.epoch = cachedSliceData.depositEpoch;
     }
 
     uint256 baseAmount = _toBase(_amount, cachedSliceData.depositIndex);
 
-    lenderDeposits[msg.sender][_slice] += baseAmount;
+    userData.baseAmount += baseAmount;
     slices[_slice].totalBaseDeposit += baseAmount;
 
     // safe transfer
@@ -70,16 +79,17 @@ contract Emu {
     // user claimable amount
 
     SliceData memory cachedSliceData = slices[_slice];
+    UserLendingData storage userData = userLendingData[msg.sender][_slice];
 
-    if (lenderEpoch[msg.sender][_slice] < cachedSliceData.depositEpoch) {
-      lenderDeposits[msg.sender][_slice] = 0;
-      lenderEpoch[msg.sender][_slice] = cachedSliceData.depositEpoch;
+    if (userData.epoch < cachedSliceData.depositEpoch) {
+      userData.baseAmount = 0;
+      userData.epoch = cachedSliceData.depositEpoch;
       return;
     }
 
     uint256 baseAmount = _toBase(_amount, cachedSliceData.depositIndex);
 
-    lenderDeposits[msg.sender][_slice] -= baseAmount;
+    userData.baseAmount -= baseAmount;
     slices[_slice].totalBaseDeposit -= baseAmount;
 
     if (
@@ -97,28 +107,63 @@ contract Emu {
   function borrow(uint256 _slice, uint256 _borrowAmount, uint256 _addedCollateral)
     external
   {
-    collateralDeposits[msg.sender][_slice] += _addedCollateral;
+    _accureInterest(_slice);
+
+    UserBorrowingData storage userData = userBorrowingData[msg.sender][_slice];
+    SliceData storage sliceData = slices[_slice];
+    uint256 currentPrice = getCurrentPrice();
+    uint256 debtIndex = slices[_slice].debtIndex;
+
+    if (_slice >= currentPrice) {
+      // throw error cant borrow
+    }
+
+    userData.collateralDeposit += _addedCollateral;
+    sliceData.totalCollateralDeposit += _addedCollateral;
     // transfer collateral token to contract from user
 
-    // Check if slice is below current price
+    uint256 baseBorrowAmount = _toBase(_borrowAmount, debtIndex);
+    userData.debtBaseAmount += baseBorrowAmount;
+    sliceData.totalBaseDebt += baseBorrowAmount;
 
-    // check if borrow is too much of their current collateral
+    // does use memory here to save gas?
+    if (
+      _toNominal(userData.debtBaseAmount, debtIndex)
+        >= userData.collateralDeposit * currentPrice
+    ) {
+      // throw error
+    }
 
-    // borrow
     // transfer debt token and events
   }
 
   function repay(uint256 _slice, uint256 _repayAmount, uint256 _removeCollateral)
     external
   {
-    // repay amount
+    _accureInterest(_slice);
 
+    UserBorrowingData storage userData = userBorrowingData[msg.sender][_slice];
+    SliceData storage sliceData = slices[_slice];
+    uint256 currentPrice = getCurrentPrice();
+    uint256 debtIndex = slices[_slice].debtIndex;
+
+    uint256 baseRepayAmount = _toBase(_repayAmount, debtIndex);
+    userData.debtBaseAmount -= baseRepayAmount;
+    sliceData.totalBaseDebt -= baseRepayAmount;
     // transfer debt token
 
-    collateralDeposits[msg.sender][_slice] -= _removeCollateral;
-    // transfer collateral token to contract from user
+    userData.collateralDeposit -= _removeCollateral;
+    sliceData.totalCollateralDeposit -= _removeCollateral;
 
-    //event
+    // does use memory here to save gas?
+    if (
+      _toNominal(userData.debtBaseAmount, debtIndex)
+        >= userData.collateralDeposit * currentPrice
+    ) {
+      // throw error
+    }
+
+    //event and transfer collateral to user
   }
 
   function liquidateSlice() external { }
@@ -132,7 +177,7 @@ contract Emu {
   function isSliceLiquidateable(uint256 _slice, address _user) external view { }
 
   function createSlice(uint256 _price) internal {
-    slices[_price] = SliceData(RAY, 0, RAY, 0, 0, block.timestamp);
+    slices[_price] = SliceData(RAY, 0, RAY, 0, 0, 0, block.timestamp);
   }
 
   function _accureInterest(uint256 _slice) internal {
@@ -170,6 +215,5 @@ contract Emu {
     return Math.mulDiv(_nominalAmount, RAY, _index);
   }
 
-  // Claim stuff
   // view function
 }
