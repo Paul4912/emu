@@ -9,16 +9,21 @@ import {
   UserBorrowingData
 } from "./model/EmuModels.sol";
 import { AggregatorV2V3Interface } from "./interface/AggregatorV2V3Interface.sol";
+import { ERC20 } from "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
+import { SafeERC20 } from
+  "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 
 contract Emu {
+  using SafeERC20 for ERC20;
+
   uint256 constant WAD = 10 ** 18;
   uint256 constant RAY = 10 ** 27;
   uint256 constant interestRateBPS = 500;
   uint256 constant BPS = 10_000;
   uint256 constant secondsInYear = 31_536_000;
-  address immutable COLLATERAL_TOKEN;
+  ERC20 immutable COLLATERAL_TOKEN;
   uint256 immutable COLLATERAL_TOKEN_DECIMALS;
-  address immutable DEBT_TOKEN;
+  ERC20 immutable DEBT_TOKEN;
   uint256 immutable DEBT_TOKEN_DECIMALS;
   AggregatorV2V3Interface immutable ORACLE;
 
@@ -41,10 +46,10 @@ contract Emu {
     address _oracle,
     address _feeReciever
   ) {
-    COLLATERAL_TOKEN = _collateralToken;
-    COLLATERAL_TOKEN_DECIMALS = 18; // make actualy calls to get this
-    DEBT_TOKEN = _debtToken;
-    DEBT_TOKEN_DECIMALS = 18;
+    COLLATERAL_TOKEN = ERC20(_collateralToken);
+    COLLATERAL_TOKEN_DECIMALS = COLLATERAL_TOKEN.decimals();
+    DEBT_TOKEN = ERC20(_debtToken);
+    DEBT_TOKEN_DECIMALS = DEBT_TOKEN.decimals();
     ORACLE = AggregatorV2V3Interface(_oracle);
     feeReciever = _feeReciever;
   }
