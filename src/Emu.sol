@@ -8,11 +8,12 @@ import {
   UserLendingData,
   UserBorrowingData
 } from "./model/EmuModels.sol";
+import { IEmu } from "./interface/IEmu.sol";
 import { AggregatorV2V3Interface } from "./interface/AggregatorV2V3Interface.sol";
 import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-contract Emu {
+contract Emu is IEmu {
   using SafeERC20 for ERC20;
 
   uint256 constant WAD = 10 ** 18;
@@ -30,7 +31,7 @@ contract Emu {
   // TODO fee system.
 
   uint256[] public createdSlices;
-  mapping(uint256 price => SliceData sliceData) private slices; // 18 decimals for price of each slice
+  mapping(uint256 price => SliceData sliceData) private slices; // use whatever decimals oracle uses
   mapping(uint256 slice => mapping(uint256 epoch => ClaimableData data)) private
     claimableData;
 
@@ -72,7 +73,7 @@ contract Emu {
 
     DEBT_TOKEN.transferFrom(msg.sender, address(this), _amount);
 
-    //emit event
+    emit LendDebtTokens(msg.sender, _slice, _amount);
   }
 
   function withdrawDebtTokens(uint256 _slice, uint256 _amount) external {
@@ -102,7 +103,8 @@ contract Emu {
     slices[_slice].totalBaseDeposit -= baseAmount;
 
     DEBT_TOKEN.transfer(msg.sender, _amount);
-    //emit event
+
+    emit WithdrawDebtTokens(msg.sender, _slice, _amount);
   }
 
   function borrow(uint256 _slice, uint256 _borrowAmount, uint128 _addedCollateral)
@@ -146,7 +148,8 @@ contract Emu {
     }
 
     DEBT_TOKEN.transfer(msg.sender, _borrowAmount);
-    // events
+
+    emit Borrow(msg.sender, _slice, _borrowAmount, _addedCollateral);
   }
 
   function repay(uint256 _slice, uint256 _repayAmount, uint128 _removeCollateral)
@@ -188,7 +191,8 @@ contract Emu {
     }
 
     COLLATERAL_TOKEN.transfer(msg.sender, _removeCollateral);
-    //event
+
+    emit Repay(msg.sender, _slice, _repayAmount, _removeCollateral);
   }
 
   function liquidateSlice(uint256 _slice) public {
@@ -227,6 +231,8 @@ contract Emu {
     liquidatedSliceData.totalBaseDebt = 0;
     liquidatedSliceData.debtIndex = RAY;
     ++liquidatedSliceData.borrowingEpoch;
+
+    emit SliceLiquidation(_slice);
   }
 
   function liquidateUser(address _user, uint256 _slice) external {
@@ -260,6 +266,8 @@ contract Emu {
     userData.collateralDeposit = 0;
     liquidatedSliceData.totalBaseDebt -= userData.baseAmount;
     userData.baseAmount = 0;
+
+    emit UserLiquidation(_user, _slice);
   }
 
   function claimBonusAndFees(uint256 _slice) external {
@@ -279,6 +287,8 @@ contract Emu {
     if (amountDebtTokenToTransfer > 0) {
       DEBT_TOKEN.transfer(msg.sender, amountDebtTokenToTransfer);
     }
+
+    emit ClaimBonusAndFees(msg.sender, _slice);
   }
 
   // change fee reciever
@@ -286,6 +296,7 @@ contract Emu {
   function createSlice(uint256 _price) internal {
     slices[_price] = SliceData(RAY, 0, RAY, 0, 0, uint128(block.timestamp), 0, 0);
     claimableData[_price][0] = ClaimableData(RAY, RAY);
+    createdSlices.push(_price);
   }
 
   function _accureInterest(uint256 _slice) internal {
