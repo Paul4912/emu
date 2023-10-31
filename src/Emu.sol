@@ -71,7 +71,7 @@ contract Emu {
     userData.baseAmount += baseAmount;
     slices[_slice].totalBaseDeposit += baseAmount;
 
-    // safe transfer
+    DEBT_TOKEN.transferFrom(msg.sender, address(this), _amount);
 
     //emit event
   }
@@ -102,7 +102,7 @@ contract Emu {
     userData.baseAmount -= baseAmount;
     slices[_slice].totalBaseDeposit -= baseAmount;
 
-    // trasnfer
+    DEBT_TOKEN.transfer(msg.sender, _amount);
     //emit event
   }
 
@@ -128,7 +128,8 @@ contract Emu {
 
     userData.collateralDeposit += _addedCollateral;
     sliceData.totalCollateralDeposit += _addedCollateral;
-    // transfer collateral token to contract from user
+
+    COLLATERAL_TOKEN.transferFrom(msg.sender, address(this), _addedCollateral);
 
     uint256 baseBorrowAmount = _toBase(_borrowAmount, debtIndex);
     userData.baseAmount += baseBorrowAmount;
@@ -145,7 +146,8 @@ contract Emu {
       // throw error
     }
 
-    // transfer debt token and events
+    DEBT_TOKEN.transfer(msg.sender, _borrowAmount);
+    // events
   }
 
   function repay(uint256 _slice, uint256 _repayAmount, uint128 _removeCollateral)
@@ -169,7 +171,8 @@ contract Emu {
     uint256 baseRepayAmount = _toBase(_repayAmount, debtIndex);
     userData.baseAmount -= baseRepayAmount;
     sliceData.totalBaseDebt -= baseRepayAmount;
-    // transfer debt token
+
+    DEBT_TOKEN.transferFrom(msg.sender, address(this), _repayAmount);
 
     userData.collateralDeposit -= _removeCollateral;
     sliceData.totalCollateralDeposit -= _removeCollateral;
@@ -185,7 +188,8 @@ contract Emu {
       // throw error
     }
 
-    //event and transfer collateral to user
+    COLLATERAL_TOKEN.transfer(msg.sender, _removeCollateral);
+    //event
   }
 
   function liquidateSlice(uint256 _slice) public {
@@ -270,11 +274,11 @@ contract Emu {
     userData.claimableDebtTokenAmount = 0;
 
     if (amountCollateralToTransfer > 0) {
-      // transfer
+      COLLATERAL_TOKEN.transfer(msg.sender, amountCollateralToTransfer);
     }
 
     if (amountDebtTokenToTransfer > 0) {
-      // transfer
+      DEBT_TOKEN.transfer(msg.sender, amountDebtTokenToTransfer);
     }
   }
 
