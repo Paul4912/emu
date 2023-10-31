@@ -23,6 +23,7 @@ contract Emu is IEmu, Ownable {
   uint256 constant BPS = 10_000;
   uint256 constant secondsInYear = 31_536_000;
 
+  uint256 immutable SLICE_INTERVAL;
   ERC20 immutable COLLATERAL_TOKEN;
   uint256 immutable COLLATERAL_TOKEN_DECIMALS;
   ERC20 immutable DEBT_TOKEN;
@@ -30,9 +31,9 @@ contract Emu is IEmu, Ownable {
   AggregatorV2V3Interface immutable ORACLE;
 
   address public feeReciever;
-  // TODO fee system.
+  uint256 public feeBPS;
+  uint256 public feeClaimableByAdmin;
 
-  // slice creation system.
   uint256[] public createdSlices;
   mapping(uint256 price => SliceData sliceData) private slices; // use whatever decimals oracle uses
   mapping(uint256 slice => mapping(uint256 epoch => ClaimableData data)) private
@@ -47,7 +48,9 @@ contract Emu is IEmu, Ownable {
     address _collateralToken,
     address _debtToken,
     address _oracle,
-    address _feeReciever
+    address _feeReciever,
+    uint256 _sliceInterval,
+    uint256 _feeBPS
   ) Ownable(msg.sender) {
     COLLATERAL_TOKEN = ERC20(_collateralToken);
     COLLATERAL_TOKEN_DECIMALS = COLLATERAL_TOKEN.decimals();
@@ -55,6 +58,8 @@ contract Emu is IEmu, Ownable {
     DEBT_TOKEN_DECIMALS = DEBT_TOKEN.decimals();
     ORACLE = AggregatorV2V3Interface(_oracle);
     feeReciever = _feeReciever;
+    SLICE_INTERVAL = _sliceInterval;
+    feeBPS = _feeBPS;
   }
 
   function depositDebtTokens(uint256 _slice, uint256 _amount) external {
@@ -123,7 +128,6 @@ contract Emu is IEmu, Ownable {
       revert SliceIsLiquidatable();
     }
 
-    // use memory for epoch for gas saving?
     if (userData.epoch < sliceData.borrowingEpoch) {
       userData.baseAmount = 0;
       userData.collateralDeposit = 0;
@@ -165,7 +169,6 @@ contract Emu is IEmu, Ownable {
     (uint256 currentPrice, uint256 decimals) = _getCurrentPrice();
     uint256 debtIndex = slices[_slice].debtIndex;
 
-    // use memory for epoch for gas saving?
     if (userData.epoch < sliceData.borrowingEpoch) {
       userData.baseAmount = 0;
       userData.collateralDeposit = 0;
@@ -294,14 +297,22 @@ contract Emu is IEmu, Ownable {
     emit ClaimBonusAndFees(msg.sender, _slice);
   }
 
-  function setFeeReciever(address _newReciever) external onlyOwner {
-    feeReciever = _newReciever;
-  }
+  function createSlice(uint256 _price) external {
+    if (_price % SLICE_INTERVAL > 0) {
+      revert InvalidSlicePosition();
+    }
 
-  function createSlice(uint256 _price) internal {
+    if (slices[_price].lastUpdate > 0) {
+      revert SliceAlreadyExists();
+    }
+
     slices[_price] = SliceData(RAY, 0, RAY, 0, 0, uint128(block.timestamp), 0, 0);
     claimableData[_price][0] = ClaimableData(RAY, RAY);
     createdSlices.push(_price);
+  }
+
+  function setFeeReciever(address _newReciever) external onlyOwner {
+    feeReciever = _newReciever;
   }
 
   function _accureInterest(uint256 _slice) internal {
@@ -312,9 +323,11 @@ contract Emu is IEmu, Ownable {
     uint256 interestAccuredPerYear = Math.mulDiv(totalDebt, interestRateBPS, BPS);
     uint256 interestAccured =
       Math.mulDiv(interestAccuredPerYear, timePassedSinceLastUpdate, secondsInYear);
+    uint256 fee = Math.mulDiv(interestAccured, feeBPS, BPS);
 
     slice.debtIndex += Math.mulDiv(interestAccured, RAY, slice.totalBaseDebt);
-    slice.depositIndex += Math.mulDiv(interestAccured, RAY, slice.totalBaseDeposit);
+    slice.depositIndex += Math.mulDiv(interestAccured - fee, RAY, slice.totalBaseDeposit);
+    feeClaimableByAdmin += fee;
     slice.lastUpdate = uint128(block.timestamp);
   }
 
@@ -378,6 +391,10 @@ contract Emu is IEmu, Ownable {
     return _slice >= currentPrice;
   }
 
+  // view functions
+
+  //slice data, slice claimable data, user borrowing and lending data
+
   function _getCurrentPrice() internal view returns (uint256, uint256) {
     int256 rawLatestAnswer = ORACLE.latestAnswer();
     uint256 latestAnswer = rawLatestAnswer > 0 ? uint256(rawLatestAnswer) : 0;
@@ -417,6 +434,4 @@ contract Emu is IEmu, Ownable {
   {
     return Math.mulDiv(_nominalAmount, RAY, _index);
   }
-
-  // view function
 }
