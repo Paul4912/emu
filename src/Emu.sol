@@ -124,6 +124,7 @@ contract Emu is IEmu, Ownable {
     SliceData storage sliceData = slices[_slice];
     (uint256 currentPrice, uint256 decimals) = _getCurrentPrice();
     uint256 debtIndex = slices[_slice].debtIndex;
+
     if (currentPrice <= _slice) {
       revert SliceIsLiquidatable();
     }
@@ -391,9 +392,111 @@ contract Emu is IEmu, Ownable {
     return _slice >= currentPrice;
   }
 
-  // view functions
+  function getSliceData(uint256 _slice) external view returns (SliceData memory) {
+    return slices[_slice];
+  }
 
-  //slice data, slice claimable data, user borrowing and lending data
+  function getClaimableData(uint256 _slice, uint256 _epoch)
+    external
+    view
+    returns (ClaimableData memory)
+  {
+    return claimableData[_slice][_epoch];
+  }
+
+  function getUserLendingData(address _user, uint256 _slice)
+    external
+    view
+    returns (UserLendingData memory)
+  {
+    return userLendingData[_user][_slice];
+  }
+
+  function getUserBorrowingData(address _user, uint256 _slice)
+    external
+    view
+    returns (UserBorrowingData memory)
+  {
+    return userBorrowingData[_user][_slice];
+  }
+
+  function getSliceLiquidity(uint256 _slice)
+    external
+    view
+    returns (
+      uint256 totalDebtTokenDeposits_,
+      uint256 totalDebt_,
+      uint256 totalUnlentLiquidity_
+    )
+  {
+    SliceData memory sliceData = slices[_slice];
+    totalDebtTokenDeposits_ =
+      _toNominal(sliceData.totalBaseDeposit, sliceData.depositIndex);
+    totalDebt_ = _toNominal(sliceData.totalBaseDebt, sliceData.debtIndex);
+    totalUnlentLiquidity_ = totalDebtTokenDeposits_ - totalDebt_;
+  }
+
+  function getUserDebtTokenDeposit(address _user, uint256 _slice)
+    external
+    view
+    returns (uint256)
+  {
+    SliceData memory sliceData = slices[_slice];
+    UserLendingData memory userData = userLendingData[_user][_slice];
+
+    if (userData.epoch < sliceData.depositEpoch) {
+      return 0;
+    }
+
+    return _toNominal(userData.baseAmount, sliceData.depositIndex);
+  }
+
+  function getUserCollateral(address _user, uint256 _slice)
+    external
+    view
+    returns (uint256)
+  {
+    SliceData memory sliceData = slices[_slice];
+    UserBorrowingData memory userData = userBorrowingData[_user][_slice];
+
+    if (userData.epoch < sliceData.borrowingEpoch) {
+      return 0;
+    }
+
+    return userData.collateralDeposit;
+  }
+
+  function getUserDebt(address _user, uint256 _slice) external view returns (uint256) {
+    SliceData memory sliceData = slices[_slice];
+    UserBorrowingData memory userData = userBorrowingData[_user][_slice];
+
+    if (userData.epoch < sliceData.borrowingEpoch) {
+      return 0;
+    }
+
+    return _toNominal(userData.baseAmount, sliceData.debtIndex);
+  }
+
+  function getClaimableAmount(address _user, uint256 _slice)
+    external
+    view
+    returns (uint256 collateral_, uint256 debtTokens_)
+  {
+    UserLendingData storage userData = userLendingData[_user][_slice];
+    collateral_ = userData.claimableCollateralAmount;
+    debtTokens_ = userData.claimableDebtTokenAmount;
+    uint256 userBaseDeposit = userData.baseAmount;
+
+    uint256 sliceClaimableCollateralIndex =
+      claimableData[_slice][userData.epoch].claimableCollateralIndex;
+    uint256 sliceClaimableDebtIndex =
+      claimableData[_slice][userData.epoch].claimableDebtTokenIndex;
+
+    collateral_ += (sliceClaimableCollateralIndex - userData.claimableCollateralIndex)
+      * userBaseDeposit;
+    debtTokens_ +=
+      (sliceClaimableDebtIndex - userData.claimableDebtTokenIndex) * userBaseDeposit;
+  }
 
   function _getCurrentPrice() internal view returns (uint256, uint256) {
     int256 rawLatestAnswer = ORACLE.latestAnswer();
