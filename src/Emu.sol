@@ -2,58 +2,52 @@
 pragma solidity ^0.8.20;
 
 import { Math } from "./library/Math.sol";
-
-// chuck into models folder
-struct SliceData {
-  //pack struct? do later
-  uint256 depositIndex;
-  uint256 totalBaseDeposit;
-  uint256 debtIndex;
-  uint256 totalBaseDebt;
-  uint256 totalCollateralDeposit;
-  uint256 depositEpoch;
-  uint256 borrowingEpoch;
-  uint256 lastUpdate;
-}
-
-struct ClaimableData {
-  uint256 claimableCollateralIndex;
-  uint256 claimableDebtTokenIndex;
-}
-
-struct UserLendingData {
-  uint256 baseAmount;
-  uint256 epoch;
-  uint256 claimableCollateralIndex;
-  uint256 claimableCollateralAmount;
-  uint256 claimableDebtTokenIndex;
-  uint256 claimableDebtTokenAmount;
-}
-
-struct UserBorrowingData {
-  uint256 debtBaseAmount;
-  uint256 collateralDeposit;
-  uint256 epoch;
-}
+import {
+  SliceData,
+  ClaimableData,
+  UserLendingData,
+  UserBorrowingData
+} from "./model/EmuModels.sol";
+import { AggregatorV2V3Interface } from "./interface/AggregatorV2V3Interface.sol";
 
 contract Emu {
+  uint256 constant WAD = 10 ** 18;
   uint256 constant RAY = 10 ** 27;
   uint256 constant interestRateBPS = 500;
   uint256 constant BPS = 10_000;
   uint256 constant secondsInYear = 31_536_000;
-  address public COLLATERAL_TOKEN; //MAKE IMMUTABLE
-  address public DEBT_TOKEN;
+  address immutable COLLATERAL_TOKEN;
+  uint256 immutable COLLATERAL_TOKEN_DECIMALS;
+  address immutable DEBT_TOKEN;
+  uint256 immutable DEBT_TOKEN_DECIMALS;
+  AggregatorV2V3Interface immutable ORACLE;
+
+  address public feeReciever;
   // TODO fee system.
 
   uint256[] public createdSlices;
-  mapping(uint256 price => SliceData sliceData) private slices;
+  mapping(uint256 price => SliceData sliceData) private slices; // 18 decimals for price of each slice
   mapping(uint256 slice => mapping(uint256 epoch => ClaimableData data)) private
-    claimableData; // initalise to ray at start of each epoch
+    claimableData;
 
   mapping(address user => mapping(uint256 slice => UserLendingData data)) private
     userLendingData;
   mapping(address user => mapping(uint256 slice => UserBorrowingData data)) private
     userBorrowingData;
+
+  constructor(
+    address _collateralToken,
+    address _debtToken,
+    address _oracle,
+    address _feeReciever
+  ) {
+    COLLATERAL_TOKEN = _collateralToken;
+    COLLATERAL_TOKEN_DECIMALS = 18; // make actualy calls to get this
+    DEBT_TOKEN = _debtToken;
+    DEBT_TOKEN_DECIMALS = 18;
+    ORACLE = AggregatorV2V3Interface(_oracle);
+    feeReciever = _feeReciever;
+  }
 
   function depositDebtTokens(uint256 _slice, uint256 _amount) external {
     _accureInterest(_slice);
@@ -107,23 +101,22 @@ contract Emu {
     //emit event
   }
 
-  function borrow(uint256 _slice, uint256 _borrowAmount, uint256 _addedCollateral)
+  function borrow(uint256 _slice, uint256 _borrowAmount, uint128 _addedCollateral)
     external
   {
     _accureInterest(_slice);
 
     UserBorrowingData storage userData = userBorrowingData[msg.sender][_slice];
     SliceData storage sliceData = slices[_slice];
-    uint256 currentPrice = _getCurrentPrice();
+    (uint256 currentPrice, uint256 decimals) = _getCurrentPrice();
     uint256 debtIndex = slices[_slice].debtIndex;
-
     if (_slice >= currentPrice) {
       // throw error cant borrow
     }
 
     // use memory for epoch for gas saving?
     if (userData.epoch < sliceData.borrowingEpoch) {
-      userData.debtBaseAmount = 0;
+      userData.baseAmount = 0;
       userData.collateralDeposit = 0;
       userData.epoch = sliceData.borrowingEpoch;
     }
@@ -133,13 +126,16 @@ contract Emu {
     // transfer collateral token to contract from user
 
     uint256 baseBorrowAmount = _toBase(_borrowAmount, debtIndex);
-    userData.debtBaseAmount += baseBorrowAmount;
+    userData.baseAmount += baseBorrowAmount;
     sliceData.totalBaseDebt += baseBorrowAmount;
 
-    // does use memory here to save gas?
     if (
-      _toNominal(userData.debtBaseAmount, debtIndex)
-        >= userData.collateralDeposit * currentPrice
+      _isCollateralUnderwater(
+        _toNominal(userData.baseAmount, debtIndex),
+        userData.collateralDeposit,
+        currentPrice,
+        decimals
+      )
     ) {
       // throw error
     }
@@ -147,36 +143,39 @@ contract Emu {
     // transfer debt token and events
   }
 
-  function repay(uint256 _slice, uint256 _repayAmount, uint256 _removeCollateral)
+  function repay(uint256 _slice, uint256 _repayAmount, uint128 _removeCollateral)
     external
   {
     _accureInterest(_slice);
 
     UserBorrowingData storage userData = userBorrowingData[msg.sender][_slice];
     SliceData storage sliceData = slices[_slice];
-    uint256 currentPrice = _getCurrentPrice();
+    (uint256 currentPrice, uint256 decimals) = _getCurrentPrice();
     uint256 debtIndex = slices[_slice].debtIndex;
 
     // use memory for epoch for gas saving?
     if (userData.epoch < sliceData.borrowingEpoch) {
-      userData.debtBaseAmount = 0;
+      userData.baseAmount = 0;
       userData.collateralDeposit = 0;
       userData.epoch = sliceData.borrowingEpoch;
       return;
     }
 
     uint256 baseRepayAmount = _toBase(_repayAmount, debtIndex);
-    userData.debtBaseAmount -= baseRepayAmount;
+    userData.baseAmount -= baseRepayAmount;
     sliceData.totalBaseDebt -= baseRepayAmount;
     // transfer debt token
 
     userData.collateralDeposit -= _removeCollateral;
     sliceData.totalCollateralDeposit -= _removeCollateral;
 
-    // does use memory here to save gas?
     if (
-      _toNominal(userData.debtBaseAmount, debtIndex)
-        >= userData.collateralDeposit * currentPrice
+      _isCollateralUnderwater(
+        _toNominal(userData.baseAmount, debtIndex),
+        userData.collateralDeposit,
+        currentPrice,
+        decimals
+      )
     ) {
       // throw error
     }
@@ -234,7 +233,7 @@ contract Emu {
 
     uint256 cachedTotalBaseDeposit = liquidatedSliceData.totalBaseDeposit;
     uint256 cachedTotalDebtLiquidated =
-      _toNominal(userData.debtBaseAmount, liquidatedSliceData.debtIndex);
+      _toNominal(userData.baseAmount, liquidatedSliceData.debtIndex);
 
     if (
       cachedTotalDebtLiquidated
@@ -251,8 +250,8 @@ contract Emu {
 
     liquidatedSliceData.totalCollateralDeposit -= userData.collateralDeposit;
     userData.collateralDeposit = 0;
-    liquidatedSliceData.totalBaseDebt -= userData.debtBaseAmount;
-    userData.debtBaseAmount = 0;
+    liquidatedSliceData.totalBaseDebt -= userData.baseAmount;
+    userData.baseAmount = 0;
   }
 
   function claimBonusAndFees(uint256 _slice) external {
@@ -274,8 +273,10 @@ contract Emu {
     }
   }
 
+  // change fee reciever
+
   function createSlice(uint256 _price) internal {
-    slices[_price] = SliceData(RAY, 0, RAY, 0, 0, 0, 0, block.timestamp);
+    slices[_price] = SliceData(RAY, 0, RAY, 0, 0, uint128(block.timestamp), 0, 0);
     claimableData[_price][0] = ClaimableData(RAY, RAY);
   }
 
@@ -290,7 +291,7 @@ contract Emu {
 
     slice.debtIndex += Math.mulDiv(interestAccured, RAY, slice.totalBaseDebt);
     slice.depositIndex += Math.mulDiv(interestAccured, RAY, slice.totalBaseDeposit);
-    slice.lastUpdate = block.timestamp;
+    slice.lastUpdate = uint128(block.timestamp);
   }
 
   function _updateClaimableDetails(address _user, uint256 _slice, uint256 _epoch)
@@ -315,13 +316,11 @@ contract Emu {
   }
 
   function isUserLiquidateable(uint256 _slice, address _user) public view returns (bool) {
-    uint256 currentPrice = _getCurrentPrice();
+    (uint256 currentPrice, uint256 decimals) = _getCurrentPrice();
     if (_slice >= currentPrice) return true;
 
     UserBorrowingData memory userData = userBorrowingData[_user][_slice];
     SliceData memory slice = slices[_slice];
-
-    // not current epoc
 
     if (userData.epoch < slice.borrowingEpoch) {
       return false;
@@ -336,8 +335,12 @@ contract Emu {
       slice.debtIndex + Math.mulDiv(interestAccured, RAY, slice.totalBaseDebt);
 
     if (
-      _toNominal(userData.debtBaseAmount, actualDebtIndex)
-        >= userData.collateralDeposit * currentPrice
+      _isCollateralUnderwater(
+        _toNominal(userData.baseAmount, actualDebtIndex),
+        userData.collateralDeposit,
+        currentPrice,
+        decimals
+      )
     ) {
       return true;
     }
@@ -346,12 +349,33 @@ contract Emu {
   }
 
   function isSliceLiquidateable(uint256 _slice) public view returns (bool) {
-    return _slice >= _getCurrentPrice();
+    (uint256 currentPrice,) = _getCurrentPrice();
+
+    return _slice >= currentPrice;
   }
 
-  // temporary. TODO: get price from standardised oracle interface
-  function _getCurrentPrice() internal view returns (uint256) {
-    return 1000 * 1e18;
+  function _getCurrentPrice() internal view returns (uint256, uint256) {
+    int256 rawLatestAnswer = ORACLE.latestAnswer();
+    uint256 latestAnswer = rawLatestAnswer > 0 ? uint256(rawLatestAnswer) : 0;
+    return (latestAnswer, uint256(ORACLE.decimals()));
+  }
+
+  function _isCollateralUnderwater(
+    uint256 _debtAmount,
+    uint256 _collateralAmount,
+    uint256 _price,
+    uint256 _priceDecimals
+  ) internal view returns (bool) {
+    uint256 normalisedCollateralValue =
+      Math.mulDiv(_collateralAmount, _price, COLLATERAL_TOKEN_DECIMALS);
+    uint256 normalisedDebtValue =
+      Math.mulDiv(_debtAmount, _priceDecimals, DEBT_TOKEN_DECIMALS);
+
+    if (normalisedCollateralValue > normalisedDebtValue) {
+      return false;
+    }
+
+    return true;
   }
 
   function _toNominal(uint256 _baseAmount, uint256 _index)
