@@ -12,8 +12,9 @@ import { IEmu } from "./interface/IEmu.sol";
 import { AggregatorV2V3Interface } from "./interface/AggregatorV2V3Interface.sol";
 import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
-contract Emu is IEmu {
+contract Emu is IEmu, Ownable {
   using SafeERC20 for ERC20;
 
   uint256 constant WAD = 10 ** 18;
@@ -21,6 +22,7 @@ contract Emu is IEmu {
   uint256 constant interestRateBPS = 500;
   uint256 constant BPS = 10_000;
   uint256 constant secondsInYear = 31_536_000;
+
   ERC20 immutable COLLATERAL_TOKEN;
   uint256 immutable COLLATERAL_TOKEN_DECIMALS;
   ERC20 immutable DEBT_TOKEN;
@@ -30,6 +32,7 @@ contract Emu is IEmu {
   address public feeReciever;
   // TODO fee system.
 
+  // slice creation system.
   uint256[] public createdSlices;
   mapping(uint256 price => SliceData sliceData) private slices; // use whatever decimals oracle uses
   mapping(uint256 slice => mapping(uint256 epoch => ClaimableData data)) private
@@ -45,7 +48,7 @@ contract Emu is IEmu {
     address _debtToken,
     address _oracle,
     address _feeReciever
-  ) {
+  ) Ownable(msg.sender) {
     COLLATERAL_TOKEN = ERC20(_collateralToken);
     COLLATERAL_TOKEN_DECIMALS = COLLATERAL_TOKEN.decimals();
     DEBT_TOKEN = ERC20(_debtToken);
@@ -94,7 +97,7 @@ contract Emu is IEmu {
       _amount + _toNominal(cachedSliceData.totalBaseDebt, cachedSliceData.debtIndex)
         > _toNominal(cachedSliceData.totalBaseDeposit, cachedSliceData.depositIndex)
     ) {
-      //throw error
+      revert InsufficientUnlentLiquidity();
     }
 
     uint256 baseAmount = _toBase(_amount, cachedSliceData.depositIndex);
@@ -116,8 +119,8 @@ contract Emu is IEmu {
     SliceData storage sliceData = slices[_slice];
     (uint256 currentPrice, uint256 decimals) = _getCurrentPrice();
     uint256 debtIndex = slices[_slice].debtIndex;
-    if (_slice >= currentPrice) {
-      // throw error cant borrow
+    if (currentPrice <= _slice) {
+      revert SliceIsLiquidatable();
     }
 
     // use memory for epoch for gas saving?
@@ -137,14 +140,14 @@ contract Emu is IEmu {
     sliceData.totalBaseDebt += baseBorrowAmount;
 
     if (
-      _isCollateralUnderwater(
+      _isCollateralLiquidatable(
         _toNominal(userData.baseAmount, debtIndex),
         userData.collateralDeposit,
         currentPrice,
         decimals
       )
     ) {
-      // throw error
+      revert PositionIsLiquidatable();
     }
 
     DEBT_TOKEN.transfer(msg.sender, _borrowAmount);
@@ -180,14 +183,14 @@ contract Emu is IEmu {
     sliceData.totalCollateralDeposit -= _removeCollateral;
 
     if (
-      _isCollateralUnderwater(
+      _isCollateralLiquidatable(
         _toNominal(userData.baseAmount, debtIndex),
         userData.collateralDeposit,
         currentPrice,
         decimals
       )
     ) {
-      // throw error
+      revert PositionIsLiquidatable();
     }
 
     COLLATERAL_TOKEN.transfer(msg.sender, _removeCollateral);
@@ -199,7 +202,7 @@ contract Emu is IEmu {
     _accureInterest(_slice);
 
     if (!isSliceLiquidateable(_slice)) {
-      //throw error not liquidatable
+      revert SliceCannotBeLiquidated();
     }
 
     SliceData storage liquidatedSliceData = slices[_slice];
@@ -239,7 +242,7 @@ contract Emu is IEmu {
     _accureInterest(_slice);
 
     if (!isUserLiquidateable(_slice, _user)) {
-      //throw error not liquidatable
+      revert PositionCannotBeLiquidated();
     }
 
     UserBorrowingData storage userData = userBorrowingData[_user][_slice];
@@ -291,7 +294,9 @@ contract Emu is IEmu {
     emit ClaimBonusAndFees(msg.sender, _slice);
   }
 
-  // change fee reciever
+  function setFeeReciever(address _newReciever) external onlyOwner {
+    feeReciever = _newReciever;
+  }
 
   function createSlice(uint256 _price) internal {
     slices[_price] = SliceData(RAY, 0, RAY, 0, 0, uint128(block.timestamp), 0, 0);
@@ -354,7 +359,7 @@ contract Emu is IEmu {
       slice.debtIndex + Math.mulDiv(interestAccured, RAY, slice.totalBaseDebt);
 
     if (
-      _isCollateralUnderwater(
+      _isCollateralLiquidatable(
         _toNominal(userData.baseAmount, actualDebtIndex),
         userData.collateralDeposit,
         currentPrice,
@@ -379,7 +384,7 @@ contract Emu is IEmu {
     return (latestAnswer, uint256(ORACLE.decimals()));
   }
 
-  function _isCollateralUnderwater(
+  function _isCollateralLiquidatable(
     uint256 _debtAmount,
     uint256 _collateralAmount,
     uint256 _price,
