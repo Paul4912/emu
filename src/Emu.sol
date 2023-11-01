@@ -17,18 +17,17 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 contract Emu is IEmu, Ownable {
   using SafeERC20 for ERC20;
 
-  uint256 constant WAD = 10 ** 18;
-  uint256 constant RAY = 10 ** 27;
-  uint256 constant interestRateBPS = 500;
-  uint256 constant BPS = 10_000;
-  uint256 constant secondsInYear = 31_536_000;
+  uint256 internal constant RAY = 10 ** 27;
+  uint256 internal constant interestRateBPS = 500;
+  uint256 internal constant BPS = 10_000;
+  uint256 internal constant secondsInYear = 31_536_000;
 
-  uint256 immutable SLICE_INTERVAL;
-  ERC20 immutable COLLATERAL_TOKEN;
-  uint256 immutable COLLATERAL_TOKEN_DECIMALS;
-  ERC20 immutable DEBT_TOKEN;
-  uint256 immutable DEBT_TOKEN_DECIMALS;
-  AggregatorV2V3Interface immutable ORACLE;
+  uint256 public immutable SLICE_INTERVAL;
+  ERC20 public immutable COLLATERAL_TOKEN;
+  uint256 public immutable COLLATERAL_TOKEN_DECIMALS;
+  ERC20 public immutable DEBT_TOKEN;
+  uint256 public immutable DEBT_TOKEN_DECIMALS;
+  AggregatorV2V3Interface public immutable ORACLE;
 
   address public feeReciever;
   uint256 public feeBPS;
@@ -63,6 +62,7 @@ contract Emu is IEmu, Ownable {
   }
 
   function depositDebtTokens(uint256 _slice, uint256 _amount) external {
+    _checkSliceExists(_slice);
     _accureInterest(_slice);
 
     SliceData memory cachedSliceData = slices[_slice];
@@ -85,6 +85,7 @@ contract Emu is IEmu, Ownable {
   }
 
   function withdrawDebtTokens(uint256 _slice, uint256 _amount) external {
+    _checkSliceExists(_slice);
     _accureInterest(_slice);
 
     SliceData memory cachedSliceData = slices[_slice];
@@ -118,6 +119,7 @@ contract Emu is IEmu, Ownable {
   function borrow(uint256 _slice, uint256 _borrowAmount, uint128 _addedCollateral)
     external
   {
+    _checkSliceExists(_slice);
     _accureInterest(_slice);
 
     UserBorrowingData storage userData = userBorrowingData[msg.sender][_slice];
@@ -163,6 +165,7 @@ contract Emu is IEmu, Ownable {
   function repay(uint256 _slice, uint256 _repayAmount, uint128 _removeCollateral)
     external
   {
+    _checkSliceExists(_slice);
     _accureInterest(_slice);
 
     UserBorrowingData storage userData = userBorrowingData[msg.sender][_slice];
@@ -203,6 +206,7 @@ contract Emu is IEmu, Ownable {
   }
 
   function liquidateSlice(uint256 _slice) public {
+    _checkSliceExists(_slice);
     _accureInterest(_slice);
 
     if (!isSliceLiquidateable(_slice)) {
@@ -243,6 +247,7 @@ contract Emu is IEmu, Ownable {
   }
 
   function liquidateUser(address _user, uint256 _slice) external {
+    _checkSliceExists(_slice);
     _accureInterest(_slice);
 
     if (!isUserLiquidateable(_slice, _user)) {
@@ -278,6 +283,8 @@ contract Emu is IEmu, Ownable {
   }
 
   function claimBonusAndFees(uint256 _slice) external {
+    _checkSliceExists(_slice);
+
     UserLendingData storage userData = userLendingData[msg.sender][_slice];
     _updateClaimableDetails(msg.sender, _slice, userData.epoch);
 
@@ -496,6 +503,19 @@ contract Emu is IEmu, Ownable {
       * userBaseDeposit;
     debtTokens_ +=
       (sliceClaimableDebtIndex - userData.claimableDebtTokenIndex) * userBaseDeposit;
+  }
+
+  function doesSliceExists(uint256 _slice) external view returns (bool) {
+    if (slices[_slice].lastUpdate > 0) {
+      return true;
+    }
+    return false;
+  }
+
+  function _checkSliceExists(uint256 _slice) internal view {
+    if (slices[_slice].lastUpdate == 0) {
+      revert SliceDoesNotExist();
+    }
   }
 
   function _getCurrentPrice() internal view returns (uint256, uint256) {

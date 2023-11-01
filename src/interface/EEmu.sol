@@ -8,6 +8,7 @@ interface EEmu {
   error PositionIsLiquidatable();
   error PositionCannotBeLiquidated();
   error SliceAlreadyExists();
+  error SliceDoesNotExist();
   error InvalidSlicePosition();
 
   event LendDebtTokens(address indexed user, uint256 indexed slice, uint256 amount);
