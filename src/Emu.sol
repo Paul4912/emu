@@ -389,13 +389,16 @@ contract Emu is IEmu, Ownable {
     UserLendingData storage userData = userLendingData[_user][_slice];
     uint256 userBaseDeposit = userData.baseAmount;
 
-    userData.claimableCollateralAmount += (
-      sliceClaimableCollateralIndex - userData.claimableCollateralIndex
-    ) * userBaseDeposit;
+    userData.claimableCollateralAmount += Math.mulDiv(
+      (sliceClaimableCollateralIndex - userData.claimableCollateralIndex),
+      userBaseDeposit,
+      RAY
+    );
     userData.claimableCollateralIndex = sliceClaimableCollateralIndex;
 
-    userData.claimableDebtTokenAmount +=
-      (sliceClaimableDebtIndex - userData.claimableDebtTokenIndex) * userBaseDeposit;
+    userData.claimableDebtTokenAmount += Math.mulDiv(
+      (sliceClaimableDebtIndex - userData.claimableDebtTokenIndex), userBaseDeposit, RAY
+    );
     userData.claimableDebtTokenIndex = sliceClaimableDebtIndex;
   }
 
@@ -567,10 +570,14 @@ contract Emu is IEmu, Ownable {
     uint256 sliceClaimableDebtIndex =
       claimableData[_slice][userData.epoch].claimableDebtTokenIndex;
 
-    collateral_ += (sliceClaimableCollateralIndex - userData.claimableCollateralIndex)
-      * userBaseDeposit;
-    debtTokens_ +=
-      (sliceClaimableDebtIndex - userData.claimableDebtTokenIndex) * userBaseDeposit;
+    collateral_ += Math.mulDiv(
+      (sliceClaimableCollateralIndex - userData.claimableCollateralIndex),
+      userBaseDeposit,
+      RAY
+    );
+    debtTokens_ += Math.mulDiv(
+      (sliceClaimableDebtIndex - userData.claimableDebtTokenIndex), userBaseDeposit, RAY
+    );
   }
 
   function doesSliceExists(uint256 _slice) external view returns (bool) {

@@ -97,6 +97,7 @@ contract EmuTest is BaseTest, EEmu {
 
     assertEq(0, underTest.getUserDebtTokenDeposit(lenderA, currentSlice));
     assertEq(0, underTest.getUserLendingData(lenderA, currentSlice).baseAmount);
+    assertEq(1.05e27, underTest.getSliceData(currentSlice).debtIndex);
     assertEq(debtToken.balanceOf(lenderA), 1_000_025e18);
   }
 
@@ -133,11 +134,113 @@ contract EmuTest is BaseTest, EEmu {
     assertEq(1025e18, underTest.getUserDebtTokenDeposit(lenderA, currentSlice));
   }
 
-  //depost also update claimining details
-  //epoch diff
-  // multiple users deposits
+  function test_repay_updatesDepositorIndex() external prankAs(lenderA) {
+    uint256 currentSlice = 1800e18;
+    uint256 lenderDepositAmount = 1000e18;
+    uint256 collateralDepositAmount = 1e18;
+    uint256 initialDebtAmount = 500e18;
+
+    underTest.depositDebtTokens(currentSlice, lenderDepositAmount);
+
+    vm.startPrank(borrowerA);
+
+    underTest.borrow(currentSlice, initialDebtAmount, collateralDepositAmount);
+
+    skip(secondsInYear);
+
+    expectTransferFrom(
+      address(debtToken), borrowerA, address(underTest), initialDebtAmount
+    );
+    expectExactEmit();
+    emit Repay(borrowerA, currentSlice, initialDebtAmount, 0);
+
+    underTest.repay(currentSlice, initialDebtAmount, 0);
+
+    assertEq(25e18, underTest.getUserDebt(borrowerA, currentSlice));
+    assertEq(1.025e27, underTest.getSliceData(currentSlice).depositIndex);
+  }
+
+  function test_liquidatesSlice_whenNotAllDebtTokensCleared_IndexStillUsable()
+    external
+    prankAs(lenderA)
+  {
+    uint256 currentSlice = 1800e18;
+    uint256 lenderDepositAmount = 1000e18;
+    uint256 collateralDepositAmount = 1e18;
+    uint256 initialDebtAmount = 999e18;
+
+    underTest.depositDebtTokens(currentSlice, lenderDepositAmount);
+
+    vm.startPrank(borrowerA);
+
+    underTest.borrow(currentSlice, initialDebtAmount, collateralDepositAmount);
+
+    expectExactEmit();
+    emit SliceLiquidation(currentSlice);
+    _mockOraclePrice(1600e18);
+    underTest.liquidateSlice(currentSlice);
+
+    assertEq(1e24, underTest.getSliceData(currentSlice).depositIndex);
+    assertEq(0, underTest.getSliceData(currentSlice).totalCollateralDeposit);
+    assertEq(0, underTest.getSliceData(currentSlice).totalBaseDebt);
+    assertEq(1e27, underTest.getSliceData(currentSlice).debtIndex);
+    assertEq(1, underTest.getSliceData(currentSlice).borrowingEpoch);
+    assertEq(1e18, underTest.getUserDebtTokenDeposit(lenderA, currentSlice));
+
+    vm.startPrank(lenderB);
+    underTest.depositDebtTokens(currentSlice, lenderDepositAmount);
+    assertEq(
+      lenderDepositAmount, underTest.getUserDebtTokenDeposit(lenderB, currentSlice)
+    );
+    assertEq(1000e21, underTest.getUserLendingData(lenderB, currentSlice).baseAmount);
+  }
+
+  function test_liquidatesSlice_whenEverythingCleared_EpochUpdated()
+    external
+    prankAs(lenderA)
+  {
+    uint256 currentSlice = 1800e18;
+    uint256 lenderDepositAmount = 1000e18;
+    uint256 collateralDepositAmount = 1e18;
+
+    underTest.depositDebtTokens(currentSlice, lenderDepositAmount);
+
+    vm.startPrank(borrowerA);
+
+    underTest.borrow(currentSlice, lenderDepositAmount, collateralDepositAmount);
+
+    _mockOraclePrice(currentSlice);
+    underTest.liquidateSlice(currentSlice);
+
+    assertEq(1e27, underTest.getSliceData(currentSlice).depositIndex);
+    assertEq(0, underTest.getSliceData(currentSlice).totalBaseDeposit);
+    assertEq(1, underTest.getSliceData(currentSlice).depositEpoch);
+    assertEq(0, underTest.getUserDebtTokenDeposit(lenderA, currentSlice));
+    assertEq(1e27, underTest.getClaimableData(currentSlice, 1).claimableCollateralIndex);
+    assertEq(1e27, underTest.getClaimableData(currentSlice, 1).claimableDebtTokenIndex);
+    (uint256 returnedCollateral,) = underTest.getClaimableAmount(lenderA, currentSlice);
+    assertEq(1e18, returnedCollateral);
+
+    vm.startPrank(lenderA);
+
+    underTest.depositDebtTokens(currentSlice, 100e18);
+    assertEq(
+      1e18, underTest.getUserLendingData(lenderA, currentSlice).claimableCollateralAmount
+    );
+    assertEq(1, underTest.getUserLendingData(lenderA, currentSlice).epoch);
+    assertEq(100e18, underTest.getUserLendingData(lenderA, currentSlice).baseAmount);
+
+    vm.startPrank(borrowerA);
+
+    _mockOraclePrice(2000e18);
+    underTest.borrow(currentSlice, 100e18, collateralDepositAmount);
+    assertEq(1, underTest.getUserBorrowingData(borrowerA, currentSlice).epoch);
+    assertEq(100e18, underTest.getUserBorrowingData(borrowerA, currentSlice).baseAmount);
+  }
+
   // multiple slices
   // cannot deposit if slice doesn't exist
+  // updates index
 
   //withdraw also updates interest
   //withdraw also update claimining details
@@ -154,6 +257,15 @@ contract EmuTest is BaseTest, EEmu {
 
   // cannot borrow if liquidatable
   // cannot borrow if slice liquidatable
+
+  // repay base case
+  // repay new epoch doesnt work
+  // multiple user and slices repay
+
+  // liquidation slice full
+  // liqudation slice not fully utilised.
+  //slice not liquidatable
+  // slice doesnt exist.
 
   //   function _expectDecreaseDebt(address module, address _user, uint256 _debt) internal {
   //     vm.expectCall(
