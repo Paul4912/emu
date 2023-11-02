@@ -79,7 +79,9 @@ contract Emu is IEmu, Ownable {
     userData.baseAmount += baseAmount;
     slices[_slice].totalBaseDeposit += baseAmount;
 
-    DEBT_TOKEN.transferFrom(msg.sender, address(this), _amount);
+    if (_amount > 0) {
+      DEBT_TOKEN.safeTransferFrom(msg.sender, address(this), _amount);
+    }
 
     emit LendDebtTokens(msg.sender, _slice, _amount);
   }
@@ -111,12 +113,14 @@ contract Emu is IEmu, Ownable {
     userData.baseAmount -= baseAmount;
     slices[_slice].totalBaseDeposit -= baseAmount;
 
-    DEBT_TOKEN.transfer(msg.sender, _amount);
+    if (_amount > 0) {
+      DEBT_TOKEN.safeTransfer(msg.sender, _amount);
+    }
 
     emit WithdrawDebtTokens(msg.sender, _slice, _amount);
   }
 
-  function borrow(uint256 _slice, uint256 _borrowAmount, uint128 _addedCollateral)
+  function borrow(uint256 _slice, uint256 _borrowAmount, uint256 _addedCollateral)
     external
   {
     _checkSliceExists(_slice);
@@ -124,7 +128,7 @@ contract Emu is IEmu, Ownable {
 
     UserBorrowingData storage userData = userBorrowingData[msg.sender][_slice];
     SliceData storage sliceData = slices[_slice];
-    (uint256 currentPrice, uint256 decimals) = _getCurrentPrice();
+    (uint256 currentPrice, uint8 decimals) = _getCurrentPrice();
     uint256 debtIndex = slices[_slice].debtIndex;
 
     if (currentPrice <= _slice) {
@@ -140,7 +144,7 @@ contract Emu is IEmu, Ownable {
     userData.collateralDeposit += _addedCollateral;
     sliceData.totalCollateralDeposit += _addedCollateral;
 
-    COLLATERAL_TOKEN.transferFrom(msg.sender, address(this), _addedCollateral);
+    COLLATERAL_TOKEN.safeTransferFrom(msg.sender, address(this), _addedCollateral);
 
     uint256 baseBorrowAmount = _toBase(_borrowAmount, debtIndex);
     userData.baseAmount += baseBorrowAmount;
@@ -157,12 +161,41 @@ contract Emu is IEmu, Ownable {
       revert PositionIsLiquidatable();
     }
 
-    DEBT_TOKEN.transfer(msg.sender, _borrowAmount);
+    DEBT_TOKEN.safeTransfer(msg.sender, _borrowAmount);
 
     emit Borrow(msg.sender, _slice, _borrowAmount, _addedCollateral);
   }
 
-  function repay(uint256 _slice, uint256 _repayAmount, uint128 _removeCollateral)
+  function repayAll(uint256 _slice, uint256 _removeCollateral) external {
+    _checkSliceExists(_slice);
+    _accureInterest(_slice);
+
+    UserBorrowingData storage userData = userBorrowingData[msg.sender][_slice];
+    SliceData storage sliceData = slices[_slice];
+
+    if (userData.epoch < sliceData.borrowingEpoch) {
+      userData.baseAmount = 0;
+      userData.collateralDeposit = 0;
+      userData.epoch = sliceData.borrowingEpoch;
+      return;
+    }
+
+    uint256 baseRepayAmount = userData.baseAmount;
+    userData.baseAmount = 0;
+    sliceData.totalBaseDebt -= baseRepayAmount;
+    uint256 nominalRepayAmount = _toNominal(baseRepayAmount, slices[_slice].debtIndex);
+
+    DEBT_TOKEN.safeTransferFrom(msg.sender, address(this), nominalRepayAmount);
+
+    userData.collateralDeposit -= _removeCollateral;
+    sliceData.totalCollateralDeposit -= _removeCollateral;
+
+    COLLATERAL_TOKEN.safeTransfer(msg.sender, _removeCollateral);
+
+    emit Repay(msg.sender, _slice, nominalRepayAmount, _removeCollateral);
+  }
+
+  function repay(uint256 _slice, uint256 _repayAmount, uint256 _removeCollateral)
     external
   {
     _checkSliceExists(_slice);
@@ -184,7 +217,7 @@ contract Emu is IEmu, Ownable {
     userData.baseAmount -= baseRepayAmount;
     sliceData.totalBaseDebt -= baseRepayAmount;
 
-    DEBT_TOKEN.transferFrom(msg.sender, address(this), _repayAmount);
+    DEBT_TOKEN.safeTransferFrom(msg.sender, address(this), _repayAmount);
 
     userData.collateralDeposit -= _removeCollateral;
     sliceData.totalCollateralDeposit -= _removeCollateral;
@@ -200,7 +233,7 @@ contract Emu is IEmu, Ownable {
       revert PositionIsLiquidatable();
     }
 
-    COLLATERAL_TOKEN.transfer(msg.sender, _removeCollateral);
+    COLLATERAL_TOKEN.safeTransfer(msg.sender, _removeCollateral);
 
     emit Repay(msg.sender, _slice, _repayAmount, _removeCollateral);
   }
@@ -295,11 +328,11 @@ contract Emu is IEmu, Ownable {
     userData.claimableDebtTokenAmount = 0;
 
     if (amountCollateralToTransfer > 0) {
-      COLLATERAL_TOKEN.transfer(msg.sender, amountCollateralToTransfer);
+      COLLATERAL_TOKEN.safeTransfer(msg.sender, amountCollateralToTransfer);
     }
 
     if (amountDebtTokenToTransfer > 0) {
-      DEBT_TOKEN.transfer(msg.sender, amountDebtTokenToTransfer);
+      DEBT_TOKEN.safeTransfer(msg.sender, amountDebtTokenToTransfer);
     }
 
     emit ClaimBonusAndFees(msg.sender, _slice);
@@ -325,16 +358,22 @@ contract Emu is IEmu, Ownable {
 
   function _accureInterest(uint256 _slice) internal {
     SliceData storage slice = slices[_slice];
+    uint256 totalBaseDebt = slice.totalBaseDebt;
+    uint256 totalBaseDeposit = slice.totalBaseDeposit;
+
+    if (totalBaseDebt == 0 || totalBaseDeposit == 0) {
+      return;
+    }
 
     uint256 timePassedSinceLastUpdate = block.timestamp - slice.lastUpdate;
-    uint256 totalDebt = _toNominal(slice.totalBaseDebt, slice.debtIndex);
+    uint256 totalDebt = _toNominal(totalBaseDebt, slice.debtIndex);
     uint256 interestAccuredPerYear = Math.mulDiv(totalDebt, interestRateBPS, BPS);
     uint256 interestAccured =
       Math.mulDiv(interestAccuredPerYear, timePassedSinceLastUpdate, secondsInYear);
     uint256 fee = Math.mulDiv(interestAccured, feeBPS, BPS);
 
-    slice.debtIndex += Math.mulDiv(interestAccured, RAY, slice.totalBaseDebt);
-    slice.depositIndex += Math.mulDiv(interestAccured - fee, RAY, slice.totalBaseDeposit);
+    slice.debtIndex += Math.mulDiv(interestAccured, RAY, totalBaseDebt);
+    slice.depositIndex += Math.mulDiv(interestAccured - fee, RAY, totalBaseDeposit);
     feeClaimableByAdmin += fee;
     slice.lastUpdate = uint128(block.timestamp);
   }
@@ -455,7 +494,22 @@ contract Emu is IEmu, Ownable {
       return 0;
     }
 
-    return _toNominal(userData.baseAmount, sliceData.depositIndex);
+    uint256 actualDepositIndex;
+
+    if (sliceData.totalBaseDeposit > 0) {
+      uint256 timePassedSinceLastUpdate = block.timestamp - sliceData.lastUpdate;
+      uint256 totalDebt = _toNominal(sliceData.totalBaseDebt, sliceData.debtIndex);
+      uint256 interestAccuredPerYear = Math.mulDiv(totalDebt, interestRateBPS, BPS);
+      uint256 interestAccured =
+        Math.mulDiv(interestAccuredPerYear, timePassedSinceLastUpdate, secondsInYear);
+      uint256 fee = Math.mulDiv(interestAccured, feeBPS, BPS);
+      actualDepositIndex = sliceData.depositIndex
+        + Math.mulDiv(interestAccured - fee, RAY, sliceData.totalBaseDeposit);
+    } else {
+      actualDepositIndex = sliceData.depositIndex;
+    }
+
+    return _toNominal(userData.baseAmount, actualDepositIndex);
   }
 
   function getUserCollateral(address _user, uint256 _slice)
@@ -481,7 +535,21 @@ contract Emu is IEmu, Ownable {
       return 0;
     }
 
-    return _toNominal(userData.baseAmount, sliceData.debtIndex);
+    uint256 actualDebtIndex;
+
+    if (sliceData.totalBaseDebt > 0) {
+      uint256 timePassedSinceLastUpdate = block.timestamp - sliceData.lastUpdate;
+      uint256 totalDebt = _toNominal(sliceData.totalBaseDebt, sliceData.debtIndex);
+      uint256 interestAccuredPerYear = Math.mulDiv(totalDebt, interestRateBPS, BPS);
+      uint256 interestAccured =
+        Math.mulDiv(interestAccuredPerYear, timePassedSinceLastUpdate, secondsInYear);
+      actualDebtIndex =
+        sliceData.debtIndex + Math.mulDiv(interestAccured, RAY, sliceData.totalBaseDebt);
+    } else {
+      actualDebtIndex = sliceData.debtIndex;
+    }
+
+    return _toNominal(userData.baseAmount, actualDebtIndex);
   }
 
   function getClaimableAmount(address _user, uint256 _slice)
@@ -518,10 +586,10 @@ contract Emu is IEmu, Ownable {
     }
   }
 
-  function _getCurrentPrice() internal view returns (uint256, uint256) {
+  function _getCurrentPrice() internal view returns (uint256, uint8) {
     int256 rawLatestAnswer = ORACLE.latestAnswer();
     uint256 latestAnswer = rawLatestAnswer > 0 ? uint256(rawLatestAnswer) : 0;
-    return (latestAnswer, uint256(ORACLE.decimals()));
+    return (latestAnswer, ORACLE.decimals());
   }
 
   function _isCollateralLiquidatable(
