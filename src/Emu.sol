@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import { Math } from "./library/Math.sol";
+import { FullMath } from "./library/FullMath.sol";
 import {
   SliceData,
   ClaimableData,
@@ -253,7 +253,9 @@ contract Emu is IEmu, Ownable {
       _toNominal(liquidatedSliceData.totalBaseDebt, liquidatedSliceData.debtIndex);
 
     claimableData[_slice][liquidatedSliceData.depositEpoch].claimableCollateralIndex +=
-      Math.mulDiv(liquidatedSliceData.totalCollateralDeposit, RAY, cachedTotalBaseDeposit);
+    FullMath.mulDiv(
+      liquidatedSliceData.totalCollateralDeposit, RAY, cachedTotalBaseDeposit
+    );
 
     if (
       cachedTotalDebtLiquidated
@@ -268,7 +270,7 @@ contract Emu is IEmu, Ownable {
         RAY;
     } else {
       liquidatedSliceData.depositIndex -=
-        Math.mulDiv(cachedTotalDebtLiquidated, RAY, cachedTotalBaseDeposit);
+        FullMath.mulDiv(cachedTotalDebtLiquidated, RAY, cachedTotalBaseDeposit);
     }
 
     liquidatedSliceData.totalCollateralDeposit = 0;
@@ -303,9 +305,9 @@ contract Emu is IEmu, Ownable {
     }
 
     liquidatedSliceData.depositIndex -=
-      Math.mulDiv(cachedTotalDebtLiquidated, RAY, cachedTotalBaseDeposit);
+      FullMath.mulDiv(cachedTotalDebtLiquidated, RAY, cachedTotalBaseDeposit);
     claimableData[_slice][liquidatedSliceData.depositEpoch].claimableCollateralIndex +=
-      Math.mulDiv(userData.collateralDeposit, RAY, cachedTotalBaseDeposit);
+      FullMath.mulDiv(userData.collateralDeposit, RAY, cachedTotalBaseDeposit);
 
     liquidatedSliceData.totalCollateralDeposit -= userData.collateralDeposit;
     userData.collateralDeposit = 0;
@@ -367,13 +369,13 @@ contract Emu is IEmu, Ownable {
 
     uint256 timePassedSinceLastUpdate = block.timestamp - slice.lastUpdate;
     uint256 totalDebt = _toNominal(totalBaseDebt, slice.debtIndex);
-    uint256 interestAccuredPerYear = Math.mulDiv(totalDebt, interestRateBPS, BPS);
+    uint256 interestAccuredPerYear = FullMath.mulDiv(totalDebt, interestRateBPS, BPS);
     uint256 interestAccured =
-      Math.mulDiv(interestAccuredPerYear, timePassedSinceLastUpdate, secondsInYear);
-    uint256 fee = Math.mulDiv(interestAccured, feeBPS, BPS);
+      FullMath.mulDiv(interestAccuredPerYear, timePassedSinceLastUpdate, secondsInYear);
+    uint256 fee = FullMath.mulDiv(interestAccured, feeBPS, BPS);
 
-    slice.debtIndex += Math.mulDiv(interestAccured, RAY, totalBaseDebt);
-    slice.depositIndex += Math.mulDiv(interestAccured - fee, RAY, totalBaseDeposit);
+    slice.debtIndex += FullMath.mulDiv(interestAccured, RAY, totalBaseDebt);
+    slice.depositIndex += FullMath.mulDiv(interestAccured - fee, RAY, totalBaseDeposit);
     feeClaimableByAdmin += fee;
     slice.lastUpdate = uint128(block.timestamp);
   }
@@ -389,14 +391,14 @@ contract Emu is IEmu, Ownable {
     UserLendingData storage userData = userLendingData[_user][_slice];
     uint256 userBaseDeposit = userData.baseAmount;
 
-    userData.claimableCollateralAmount += Math.mulDiv(
+    userData.claimableCollateralAmount += FullMath.mulDiv(
       (sliceClaimableCollateralIndex - userData.claimableCollateralIndex),
       userBaseDeposit,
       RAY
     );
     userData.claimableCollateralIndex = sliceClaimableCollateralIndex;
 
-    userData.claimableDebtTokenAmount += Math.mulDiv(
+    userData.claimableDebtTokenAmount += FullMath.mulDiv(
       (sliceClaimableDebtIndex - userData.claimableDebtTokenIndex), userBaseDeposit, RAY
     );
     userData.claimableDebtTokenIndex = sliceClaimableDebtIndex;
@@ -415,11 +417,11 @@ contract Emu is IEmu, Ownable {
 
     uint256 timePassedSinceLastUpdate = block.timestamp - slice.lastUpdate;
     uint256 totalDebt = _toNominal(slice.totalBaseDebt, slice.debtIndex);
-    uint256 interestAccuredPerYear = Math.mulDiv(totalDebt, interestRateBPS, BPS);
+    uint256 interestAccuredPerYear = FullMath.mulDiv(totalDebt, interestRateBPS, BPS);
     uint256 interestAccured =
-      Math.mulDiv(interestAccuredPerYear, timePassedSinceLastUpdate, secondsInYear);
+      FullMath.mulDiv(interestAccuredPerYear, timePassedSinceLastUpdate, secondsInYear);
     uint256 actualDebtIndex =
-      slice.debtIndex + Math.mulDiv(interestAccured, RAY, slice.totalBaseDebt);
+      slice.debtIndex + FullMath.mulDiv(interestAccured, RAY, slice.totalBaseDebt);
 
     if (
       _isCollateralLiquidatable(
@@ -502,12 +504,12 @@ contract Emu is IEmu, Ownable {
     if (sliceData.totalBaseDeposit > 0) {
       uint256 timePassedSinceLastUpdate = block.timestamp - sliceData.lastUpdate;
       uint256 totalDebt = _toNominal(sliceData.totalBaseDebt, sliceData.debtIndex);
-      uint256 interestAccuredPerYear = Math.mulDiv(totalDebt, interestRateBPS, BPS);
+      uint256 interestAccuredPerYear = FullMath.mulDiv(totalDebt, interestRateBPS, BPS);
       uint256 interestAccured =
-        Math.mulDiv(interestAccuredPerYear, timePassedSinceLastUpdate, secondsInYear);
-      uint256 fee = Math.mulDiv(interestAccured, feeBPS, BPS);
+        FullMath.mulDiv(interestAccuredPerYear, timePassedSinceLastUpdate, secondsInYear);
+      uint256 fee = FullMath.mulDiv(interestAccured, feeBPS, BPS);
       actualDepositIndex = sliceData.depositIndex
-        + Math.mulDiv(interestAccured - fee, RAY, sliceData.totalBaseDeposit);
+        + FullMath.mulDiv(interestAccured - fee, RAY, sliceData.totalBaseDeposit);
     } else {
       actualDepositIndex = sliceData.depositIndex;
     }
@@ -543,11 +545,11 @@ contract Emu is IEmu, Ownable {
     if (sliceData.totalBaseDebt > 0) {
       uint256 timePassedSinceLastUpdate = block.timestamp - sliceData.lastUpdate;
       uint256 totalDebt = _toNominal(sliceData.totalBaseDebt, sliceData.debtIndex);
-      uint256 interestAccuredPerYear = Math.mulDiv(totalDebt, interestRateBPS, BPS);
+      uint256 interestAccuredPerYear = FullMath.mulDiv(totalDebt, interestRateBPS, BPS);
       uint256 interestAccured =
-        Math.mulDiv(interestAccuredPerYear, timePassedSinceLastUpdate, secondsInYear);
-      actualDebtIndex =
-        sliceData.debtIndex + Math.mulDiv(interestAccured, RAY, sliceData.totalBaseDebt);
+        FullMath.mulDiv(interestAccuredPerYear, timePassedSinceLastUpdate, secondsInYear);
+      actualDebtIndex = sliceData.debtIndex
+        + FullMath.mulDiv(interestAccured, RAY, sliceData.totalBaseDebt);
     } else {
       actualDebtIndex = sliceData.debtIndex;
     }
@@ -570,12 +572,12 @@ contract Emu is IEmu, Ownable {
     uint256 sliceClaimableDebtIndex =
       claimableData[_slice][userData.epoch].claimableDebtTokenIndex;
 
-    collateral_ += Math.mulDiv(
+    collateral_ += FullMath.mulDiv(
       (sliceClaimableCollateralIndex - userData.claimableCollateralIndex),
       userBaseDeposit,
       RAY
     );
-    debtTokens_ += Math.mulDiv(
+    debtTokens_ += FullMath.mulDiv(
       (sliceClaimableDebtIndex - userData.claimableDebtTokenIndex), userBaseDeposit, RAY
     );
   }
@@ -606,9 +608,9 @@ contract Emu is IEmu, Ownable {
     uint256 _priceDecimals
   ) internal view returns (bool) {
     uint256 normalisedCollateralValue =
-      Math.mulDiv(_collateralAmount, _price, COLLATERAL_TOKEN_DECIMALS);
+      FullMath.mulDiv(_collateralAmount, _price, COLLATERAL_TOKEN_DECIMALS);
     uint256 normalisedDebtValue =
-      Math.mulDiv(_debtAmount, _priceDecimals, DEBT_TOKEN_DECIMALS);
+      FullMath.mulDiv(_debtAmount, _priceDecimals, DEBT_TOKEN_DECIMALS);
 
     if (normalisedCollateralValue > normalisedDebtValue) {
       return false;
@@ -622,7 +624,7 @@ contract Emu is IEmu, Ownable {
     pure
     returns (uint256)
   {
-    return Math.mulDiv(_baseAmount, _index, RAY);
+    return FullMath.mulDiv(_baseAmount, _index, RAY);
   }
 
   function _toBase(uint256 _nominalAmount, uint256 _index)
@@ -630,6 +632,6 @@ contract Emu is IEmu, Ownable {
     pure
     returns (uint256)
   {
-    return Math.mulDiv(_nominalAmount, RAY, _index);
+    return FullMath.mulDiv(_nominalAmount, RAY, _index);
   }
 }
