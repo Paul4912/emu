@@ -29,12 +29,13 @@ contract Emu is IEmu, Ownable {
   uint256 public immutable DEBT_TOKEN_DECIMALS;
   AggregatorV2V3Interface public immutable ORACLE;
 
+  //TODO redo interest reciever.
   address public feeReciever;
   uint256 public feeBPS;
   uint256 public feeClaimableByAdmin;
 
   uint256[] public createdSlices;
-  mapping(uint256 price => SliceData sliceData) private slices; // use whatever decimals oracle uses
+  mapping(uint256 price => SliceData sliceData) private slices; // uses whatever decimals oracle uses
   mapping(uint256 slice => mapping(uint256 epoch => ClaimableData data)) private
     claimableData;
 
@@ -120,6 +121,7 @@ contract Emu is IEmu, Ownable {
     emit WithdrawDebtTokens(msg.sender, _slice, _amount);
   }
 
+  // need to not allow them to borrow more if not enough unlent liquidity.
   function borrow(uint256 _slice, uint256 _borrowAmount, uint256 _addedCollateral)
     external
   {
@@ -133,12 +135,6 @@ contract Emu is IEmu, Ownable {
 
     if (currentPrice <= _slice) {
       revert SliceIsLiquidatable();
-    }
-
-    if (userData.epoch < sliceData.borrowingEpoch) {
-      userData.baseAmount = 0;
-      userData.collateralDeposit = 0;
-      userData.epoch = sliceData.borrowingEpoch;
     }
 
     userData.collateralDeposit += _addedCollateral;
@@ -166,25 +162,18 @@ contract Emu is IEmu, Ownable {
     emit Borrow(msg.sender, _slice, _borrowAmount, _addedCollateral);
   }
 
-  function repayAll(uint256 _slice, uint256 _removeCollateral) external {
+  function repayAll(uint256 _slice, uint256 _removeCollateral) public {
     _checkSliceExists(_slice);
     _accureInterest(_slice);
 
     UserBorrowingData storage userData = userBorrowingData[msg.sender][_slice];
     SliceData storage sliceData = slices[_slice];
 
-    if (userData.epoch < sliceData.borrowingEpoch) {
-      userData.baseAmount = 0;
-      userData.collateralDeposit = 0;
-      userData.epoch = sliceData.borrowingEpoch;
-      return;
-    }
-
     uint256 baseRepayAmount = userData.baseAmount;
     userData.baseAmount = 0;
     sliceData.totalBaseDebt -= baseRepayAmount;
-    uint256 nominalRepayAmount = _toNominal(baseRepayAmount, slices[_slice].debtIndex);
 
+    uint256 nominalRepayAmount = _toNominal(baseRepayAmount, slices[_slice].debtIndex);
     DEBT_TOKEN.safeTransferFrom(msg.sender, address(this), nominalRepayAmount);
 
     userData.collateralDeposit -= _removeCollateral;
@@ -206,16 +195,14 @@ contract Emu is IEmu, Ownable {
     (uint256 currentPrice, uint256 decimals) = _getCurrentPrice();
     uint256 debtIndex = slices[_slice].debtIndex;
 
-    if (userData.epoch < sliceData.borrowingEpoch) {
-      userData.baseAmount = 0;
-      userData.collateralDeposit = 0;
-      userData.epoch = sliceData.borrowingEpoch;
-      return;
-    }
-
     uint256 baseRepayAmount = _toBase(_repayAmount, debtIndex);
-    userData.baseAmount -= baseRepayAmount;
-    sliceData.totalBaseDebt -= baseRepayAmount;
+    if (baseRepayAmount > userData.baseAmount) {
+      repayAll(_slice, _removeCollateral);
+      return;
+    } else {
+      userData.baseAmount -= baseRepayAmount;
+      sliceData.totalBaseDebt -= baseRepayAmount;
+    }
 
     DEBT_TOKEN.safeTransferFrom(msg.sender, address(this), _repayAmount);
 
@@ -238,49 +225,6 @@ contract Emu is IEmu, Ownable {
     emit Repay(msg.sender, _slice, _repayAmount, _removeCollateral);
   }
 
-  function liquidateSlice(uint256 _slice) public {
-    _checkSliceExists(_slice);
-    _accureInterest(_slice);
-
-    if (!isSliceLiquidateable(_slice)) {
-      revert SliceCannotBeLiquidated();
-    }
-
-    SliceData storage liquidatedSliceData = slices[_slice];
-
-    uint256 cachedTotalBaseDeposit = liquidatedSliceData.totalBaseDeposit;
-    uint256 cachedTotalDebtLiquidated =
-      _toNominal(liquidatedSliceData.totalBaseDebt, liquidatedSliceData.debtIndex);
-
-    claimableData[_slice][liquidatedSliceData.depositEpoch].claimableCollateralIndex +=
-    FullMath.mulDiv(
-      liquidatedSliceData.totalCollateralDeposit, RAY, cachedTotalBaseDeposit
-    );
-
-    if (
-      cachedTotalDebtLiquidated
-        >= _toNominal(cachedTotalBaseDeposit, liquidatedSliceData.depositIndex)
-    ) {
-      liquidatedSliceData.depositIndex = RAY;
-      liquidatedSliceData.totalBaseDeposit = 0;
-      ++liquidatedSliceData.depositEpoch;
-      claimableData[_slice][liquidatedSliceData.depositEpoch].claimableCollateralIndex =
-        RAY;
-      claimableData[_slice][liquidatedSliceData.depositEpoch].claimableDebtTokenIndex =
-        RAY;
-    } else {
-      liquidatedSliceData.depositIndex -=
-        FullMath.mulDiv(cachedTotalDebtLiquidated, RAY, cachedTotalBaseDeposit);
-    }
-
-    liquidatedSliceData.totalCollateralDeposit = 0;
-    liquidatedSliceData.totalBaseDebt = 0;
-    liquidatedSliceData.debtIndex = RAY;
-    ++liquidatedSliceData.borrowingEpoch;
-
-    emit SliceLiquidation(_slice);
-  }
-
   function liquidateUser(address _user, uint256 _slice) external {
     _checkSliceExists(_slice);
     _accureInterest(_slice);
@@ -296,21 +240,20 @@ contract Emu is IEmu, Ownable {
     uint256 cachedTotalDebtLiquidated =
       _toNominal(userData.baseAmount, liquidatedSliceData.debtIndex);
 
-    if (
-      cachedTotalDebtLiquidated
-        >= _toNominal(cachedTotalBaseDeposit, liquidatedSliceData.depositIndex)
-    ) {
-      liquidateSlice(_slice);
-      return;
-    }
-
     liquidatedSliceData.depositIndex -=
       FullMath.mulDiv(cachedTotalDebtLiquidated, RAY, cachedTotalBaseDeposit);
     claimableData[_slice][liquidatedSliceData.depositEpoch].claimableCollateralIndex +=
       FullMath.mulDiv(userData.collateralDeposit, RAY, cachedTotalBaseDeposit);
 
-    liquidatedSliceData.totalCollateralDeposit -= userData.collateralDeposit;
-    userData.collateralDeposit = 0;
+    (uint256 currentPrice, uint256 decimals) = _getCurrentPrice();
+    uint256 userCollateralLiquidated =
+      FullMath.mulDiv(cachedTotalDebtLiquidated, currentPrice, decimals);
+    userCollateralLiquidated = userCollateralLiquidated < userData.collateralDeposit
+      ? userCollateralLiquidated
+      : userData.collateralDeposit;
+
+    liquidatedSliceData.totalCollateralDeposit -= userCollateralLiquidated;
+    userData.collateralDeposit -= userCollateralLiquidated;
     liquidatedSliceData.totalBaseDebt -= userData.baseAmount;
     userData.baseAmount = 0;
 
@@ -411,10 +354,6 @@ contract Emu is IEmu, Ownable {
     UserBorrowingData memory userData = userBorrowingData[_user][_slice];
     SliceData memory slice = slices[_slice];
 
-    if (userData.epoch < slice.borrowingEpoch) {
-      return false;
-    }
-
     uint256 timePassedSinceLastUpdate = block.timestamp - slice.lastUpdate;
     uint256 totalDebt = _toNominal(slice.totalBaseDebt, slice.debtIndex);
     uint256 interestAccuredPerYear = FullMath.mulDiv(totalDebt, interestRateBPS, BPS);
@@ -435,12 +374,6 @@ contract Emu is IEmu, Ownable {
     }
 
     return false;
-  }
-
-  function isSliceLiquidateable(uint256 _slice) public view returns (bool) {
-    (uint256 currentPrice,) = _getCurrentPrice();
-
-    return _slice >= currentPrice;
   }
 
   function getSliceData(uint256 _slice) external view returns (SliceData memory) {
@@ -522,23 +455,12 @@ contract Emu is IEmu, Ownable {
     view
     returns (uint256)
   {
-    SliceData memory sliceData = slices[_slice];
-    UserBorrowingData memory userData = userBorrowingData[_user][_slice];
-
-    if (userData.epoch < sliceData.borrowingEpoch) {
-      return 0;
-    }
-
-    return userData.collateralDeposit;
+    return userBorrowingData[_user][_slice].collateralDeposit;
   }
 
   function getUserDebt(address _user, uint256 _slice) external view returns (uint256) {
     SliceData memory sliceData = slices[_slice];
     UserBorrowingData memory userData = userBorrowingData[_user][_slice];
-
-    if (userData.epoch < sliceData.borrowingEpoch) {
-      return 0;
-    }
 
     uint256 actualDebtIndex;
 
@@ -602,15 +524,15 @@ contract Emu is IEmu, Ownable {
   }
 
   function _isCollateralLiquidatable(
-    uint256 _debtAmount,
-    uint256 _collateralAmount,
+    uint256 _debtAmountNominal,
+    uint256 _collateralAmountNominal,
     uint256 _price,
     uint256 _priceDecimals
   ) internal view returns (bool) {
     uint256 normalisedCollateralValue =
-      FullMath.mulDiv(_collateralAmount, _price, COLLATERAL_TOKEN_DECIMALS);
+      FullMath.mulDiv(_collateralAmountNominal, _price, COLLATERAL_TOKEN_DECIMALS);
     uint256 normalisedDebtValue =
-      FullMath.mulDiv(_debtAmount, _priceDecimals, DEBT_TOKEN_DECIMALS);
+      FullMath.mulDiv(_debtAmountNominal, _priceDecimals, DEBT_TOKEN_DECIMALS);
 
     if (normalisedCollateralValue > normalisedDebtValue) {
       return false;
