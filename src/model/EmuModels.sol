@@ -29,5 +29,4 @@ struct UserLendingData {
 struct UserBorrowingData {
   uint256 baseAmount;
   uint256 collateralDeposit;
-  uint256 epoch;
 }
