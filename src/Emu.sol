@@ -38,7 +38,6 @@ contract Emu is IEmu, Ownable {
   mapping(uint256 price => SliceData sliceData) private slices; // uses whatever decimals oracle uses
   mapping(uint256 slice => mapping(uint256 epoch => ClaimableData data)) private
     claimableData;
-
   mapping(address user => mapping(uint256 slice => UserLendingData data)) private
     userLendingData;
   mapping(address user => mapping(uint256 slice => UserBorrowingData data)) private
@@ -240,10 +239,21 @@ contract Emu is IEmu, Ownable {
     uint256 cachedTotalDebtLiquidated =
       _toNominal(userData.baseAmount, liquidatedSliceData.debtIndex);
 
-    liquidatedSliceData.depositIndex -=
-      FullMath.mulDiv(cachedTotalDebtLiquidated, RAY, cachedTotalBaseDeposit);
-    claimableData[_slice][liquidatedSliceData.depositEpoch].claimableCollateralIndex +=
-      FullMath.mulDiv(userData.collateralDeposit, RAY, cachedTotalBaseDeposit);
+    if (
+      cachedTotalDebtLiquidated
+        >= _toNominal(cachedTotalBaseDeposit, liquidatedSliceData.depositIndex)
+    ) {
+      liquidatedSliceData.depositIndex = RAY;
+      liquidatedSliceData.totalBaseDeposit = 0;
+      ++liquidatedSliceData.depositEpoch;
+      claimableData[_slice][liquidatedSliceData.depositEpoch].claimableCollateralIndex =
+        RAY;
+      claimableData[_slice][liquidatedSliceData.depositEpoch].claimableDebtTokenIndex =
+        RAY;
+    } else {
+      liquidatedSliceData.depositIndex -=
+        FullMath.mulDiv(cachedTotalDebtLiquidated, RAY, cachedTotalBaseDeposit);
+    }
 
     (uint256 currentPrice, uint256 decimals) = _getCurrentPrice();
     uint256 userCollateralLiquidated =
@@ -251,6 +261,8 @@ contract Emu is IEmu, Ownable {
     userCollateralLiquidated = userCollateralLiquidated < userData.collateralDeposit
       ? userCollateralLiquidated
       : userData.collateralDeposit;
+    claimableData[_slice][liquidatedSliceData.depositEpoch].claimableCollateralIndex +=
+      FullMath.mulDiv(userCollateralLiquidated, RAY, cachedTotalBaseDeposit);
 
     liquidatedSliceData.totalCollateralDeposit -= userCollateralLiquidated;
     userData.collateralDeposit -= userCollateralLiquidated;
