@@ -14,7 +14,7 @@ struct SliceData {
 
 struct ClaimableData {
   uint256 claimableCollateralIndex;
-  uint256 claimableDebtTokenIndex;
+  uint256 claimableDebtTokenIndex; // remove this
 }
 
 struct UserLendingData {
