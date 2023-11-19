@@ -12,17 +12,10 @@ struct SliceData {
   uint64 borrowingEpoch;
 }
 
-struct ClaimableData {
-  uint256 claimableCollateralIndex;
-  uint256 claimableDebtTokenIndex; // remove this
-}
-
 struct UserLendingData {
   uint256 baseAmount;
   uint256 claimableCollateralIndex;
-  uint256 claimableCollateralAmount;
-  uint256 claimableDebtTokenIndex;
-  uint256 claimableDebtTokenAmount;
+  uint256 claimableCollateralAmount; // pack struct here?
   uint256 epoch;
 }
 

@@ -2,12 +2,7 @@
 pragma solidity ^0.8.20;
 
 import { FullMath } from "./libraries/FullMath.sol";
-import {
-  SliceData,
-  ClaimableData,
-  UserLendingData,
-  UserBorrowingData
-} from "./model/EmuModels.sol";
+import { SliceData, UserLendingData, UserBorrowingData } from "./model/EmuModels.sol";
 import { IEmu } from "./interface/IEmu.sol";
 import { AggregatorV2V3Interface } from "./interface/AggregatorV2V3Interface.sol";
 import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -36,8 +31,7 @@ contract Emu is IEmu, Ownable {
 
   uint256[] public createdSlices;
   mapping(uint256 price => SliceData sliceData) private slices; // uses whatever decimals oracle uses
-  mapping(uint256 slice => mapping(uint256 epoch => ClaimableData data)) private
-    claimableData;
+  mapping(uint256 slice => mapping(uint256 epoch => uint256 data)) private claimableData;
   mapping(address user => mapping(uint256 slice => UserLendingData data)) private
     userLendingData;
   mapping(address user => mapping(uint256 slice => UserBorrowingData data)) private
@@ -246,10 +240,7 @@ contract Emu is IEmu, Ownable {
       liquidatedSliceData.depositIndex = RAY;
       liquidatedSliceData.totalBaseDeposit = 0;
       ++liquidatedSliceData.depositEpoch;
-      claimableData[_slice][liquidatedSliceData.depositEpoch].claimableCollateralIndex =
-        RAY;
-      claimableData[_slice][liquidatedSliceData.depositEpoch].claimableDebtTokenIndex =
-        RAY;
+      claimableData[_slice][liquidatedSliceData.depositEpoch] = RAY;
     } else {
       liquidatedSliceData.depositIndex -=
         FullMath.mulDiv(cachedTotalDebtLiquidated, RAY, cachedTotalBaseDeposit);
@@ -261,7 +252,7 @@ contract Emu is IEmu, Ownable {
     userCollateralLiquidated = userCollateralLiquidated < userData.collateralDeposit
       ? userCollateralLiquidated
       : userData.collateralDeposit;
-    claimableData[_slice][liquidatedSliceData.depositEpoch].claimableCollateralIndex +=
+    claimableData[_slice][liquidatedSliceData.depositEpoch] +=
       FullMath.mulDiv(userCollateralLiquidated, RAY, cachedTotalBaseDeposit);
 
     liquidatedSliceData.totalCollateralDeposit -= userCollateralLiquidated;
@@ -279,17 +270,10 @@ contract Emu is IEmu, Ownable {
     _updateClaimableDetails(msg.sender, _slice, userData.epoch);
 
     uint256 amountCollateralToTransfer = userData.claimableCollateralAmount;
-    uint256 amountDebtTokenToTransfer = userData.claimableDebtTokenAmount;
-
     userData.claimableCollateralAmount = 0;
-    userData.claimableDebtTokenAmount = 0;
 
     if (amountCollateralToTransfer > 0) {
       COLLATERAL_TOKEN.safeTransfer(msg.sender, amountCollateralToTransfer);
-    }
-
-    if (amountDebtTokenToTransfer > 0) {
-      DEBT_TOKEN.safeTransfer(msg.sender, amountDebtTokenToTransfer);
     }
 
     emit ClaimBonusAndFees(msg.sender, _slice);
@@ -305,7 +289,7 @@ contract Emu is IEmu, Ownable {
     }
 
     slices[_price] = SliceData(RAY, 0, RAY, 0, 0, uint128(block.timestamp), 0, 0);
-    claimableData[_price][0] = ClaimableData(RAY, RAY);
+    claimableData[_price][0] = RAY;
     createdSlices.push(_price);
   }
 
@@ -338,10 +322,7 @@ contract Emu is IEmu, Ownable {
   function _updateClaimableDetails(address _user, uint256 _slice, uint256 _epoch)
     internal
   {
-    uint256 sliceClaimableCollateralIndex =
-      claimableData[_slice][_epoch].claimableCollateralIndex;
-    uint256 sliceClaimableDebtIndex =
-      claimableData[_slice][_epoch].claimableDebtTokenIndex;
+    uint256 sliceClaimableCollateralIndex = claimableData[_slice][_epoch];
 
     UserLendingData storage userData = userLendingData[_user][_slice];
     uint256 userBaseDeposit = userData.baseAmount;
@@ -352,11 +333,6 @@ contract Emu is IEmu, Ownable {
       RAY
     );
     userData.claimableCollateralIndex = sliceClaimableCollateralIndex;
-
-    userData.claimableDebtTokenAmount += FullMath.mulDiv(
-      (sliceClaimableDebtIndex - userData.claimableDebtTokenIndex), userBaseDeposit, RAY
-    );
-    userData.claimableDebtTokenIndex = sliceClaimableDebtIndex;
   }
 
   function isUserLiquidateable(uint256 _slice, address _user) public view returns (bool) {
@@ -395,7 +371,7 @@ contract Emu is IEmu, Ownable {
   function getClaimableData(uint256 _slice, uint256 _epoch)
     external
     view
-    returns (ClaimableData memory)
+    returns (uint256)
   {
     return claimableData[_slice][_epoch];
   }
@@ -494,25 +470,18 @@ contract Emu is IEmu, Ownable {
   function getClaimableAmount(address _user, uint256 _slice)
     external
     view
-    returns (uint256 collateral_, uint256 debtTokens_)
+    returns (uint256 collateral_)
   {
     UserLendingData storage userData = userLendingData[_user][_slice];
     collateral_ = userData.claimableCollateralAmount;
-    debtTokens_ = userData.claimableDebtTokenAmount;
     uint256 userBaseDeposit = userData.baseAmount;
 
-    uint256 sliceClaimableCollateralIndex =
-      claimableData[_slice][userData.epoch].claimableCollateralIndex;
-    uint256 sliceClaimableDebtIndex =
-      claimableData[_slice][userData.epoch].claimableDebtTokenIndex;
+    uint256 sliceClaimableCollateralIndex = claimableData[_slice][userData.epoch];
 
     collateral_ += FullMath.mulDiv(
       (sliceClaimableCollateralIndex - userData.claimableCollateralIndex),
       userBaseDeposit,
       RAY
-    );
-    debtTokens_ += FullMath.mulDiv(
-      (sliceClaimableDebtIndex - userData.claimableDebtTokenIndex), userBaseDeposit, RAY
     );
   }
 
