@@ -114,7 +114,6 @@ contract Emu is IEmu, Ownable {
     emit WithdrawDebtTokens(msg.sender, _slice, _amount);
   }
 
-  // need to not allow them to borrow more if not enough unlent liquidity.
   function borrow(uint256 _slice, uint256 _borrowAmount, uint256 _addedCollateral)
     external
   {
@@ -148,6 +147,13 @@ contract Emu is IEmu, Ownable {
       )
     ) {
       revert PositionIsLiquidatable();
+    }
+
+    if (
+      _toNominal(sliceData.totalBaseDebt, debtIndex)
+        > _toNominal(sliceData.totalBaseDeposit, sliceData.depositIndex)
+    ) {
+      revert InsufficientUnlentLiquidity();
     }
 
     DEBT_TOKEN.safeTransfer(msg.sender, _borrowAmount);
