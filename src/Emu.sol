@@ -25,12 +25,6 @@ contract Emu is IEmu, Ownable {
   uint256 public immutable LIQUIDATION_FEE; // Priced in debt tokens
   AggregatorV2V3Interface public immutable ORACLE;
 
-  //TODO redo interest reciever.
-  address public feeReciever;
-  uint256 public feeBPS;
-  uint256 public feeClaimableByAdmin;
-  uint256 public collateralClaimableByFeeReciever;
-
   uint256[] public createdSlices;
   mapping(uint256 price => SliceData sliceData) private slices; // uses whatever decimals oracle uses
   mapping(uint256 slice => mapping(uint256 epoch => uint256 data)) private claimableData;
@@ -45,9 +39,7 @@ contract Emu is IEmu, Ownable {
     address _debtToken,
     uint256 _liquidationFee,
     address _oracle,
-    address _feeReciever,
-    uint256 _sliceInterval,
-    uint256 _feeBPS
+    uint256 _sliceInterval
   ) Ownable(msg.sender) {
     COLLATERAL_TOKEN = ERC20(_collateralToken);
     COLLATERAL_TOKEN_DECIMALS = COLLATERAL_TOKEN.decimals();
@@ -55,9 +47,7 @@ contract Emu is IEmu, Ownable {
     DEBT_TOKEN_DECIMALS = DEBT_TOKEN.decimals();
     LIQUIDATION_FEE = _liquidationFee;
     ORACLE = AggregatorV2V3Interface(_oracle);
-    feeReciever = _feeReciever;
     SLICE_INTERVAL = _sliceInterval;
-    feeBPS = _feeBPS;
   }
 
   function depositDebtTokens(uint256 _slice, uint256 _amount) external {
@@ -314,10 +304,6 @@ contract Emu is IEmu, Ownable {
     createdSlices.push(_price);
   }
 
-  function setFeeReciever(address _newReciever) external onlyOwner {
-    feeReciever = _newReciever;
-  }
-
   function _accureInterest(uint256 _slice) internal {
     SliceData storage slice = slices[_slice];
     uint256 totalBaseDebt = slice.totalBaseDebt;
@@ -332,11 +318,9 @@ contract Emu is IEmu, Ownable {
     uint256 interestAccuredPerYear = FullMath.mulDiv(totalDebt, interestRateBPS, BPS);
     uint256 interestAccured =
       FullMath.mulDiv(interestAccuredPerYear, timePassedSinceLastUpdate, secondsInYear);
-    uint256 fee = FullMath.mulDiv(interestAccured, feeBPS, BPS);
 
     slice.debtIndex += FullMath.mulDiv(interestAccured, RAY, totalBaseDebt);
-    slice.depositIndex += FullMath.mulDiv(interestAccured - fee, RAY, totalBaseDeposit);
-    feeClaimableByAdmin += fee;
+    slice.depositIndex += FullMath.mulDiv(interestAccured, RAY, totalBaseDeposit);
     slice.lastUpdate = uint128(block.timestamp);
   }
 
@@ -453,9 +437,8 @@ contract Emu is IEmu, Ownable {
       uint256 interestAccuredPerYear = FullMath.mulDiv(totalDebt, interestRateBPS, BPS);
       uint256 interestAccured =
         FullMath.mulDiv(interestAccuredPerYear, timePassedSinceLastUpdate, secondsInYear);
-      uint256 fee = FullMath.mulDiv(interestAccured, feeBPS, BPS);
       actualDepositIndex = sliceData.depositIndex
-        + FullMath.mulDiv(interestAccured - fee, RAY, sliceData.totalBaseDeposit);
+        + FullMath.mulDiv(interestAccured, RAY, sliceData.totalBaseDeposit);
     } else {
       actualDepositIndex = sliceData.depositIndex;
     }

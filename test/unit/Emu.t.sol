@@ -26,7 +26,7 @@ contract EmuTest is BaseTest, EEmu {
     debtToken = new MockERC20("debtToken", "USDC", 18);
     collateralToken = new MockERC20("collateralToken", "ETH", 18);
     underTest =
-    new Emu(address(collateralToken), address(debtToken), 0, address(mockOracle), owner, 50e18, 0);
+      new Emu(address(collateralToken), address(debtToken), 0, address(mockOracle), 50e18);
 
     _mintInitialTokens();
     _createInitialSlices();
@@ -46,9 +46,7 @@ contract EmuTest is BaseTest, EEmu {
     assertEq(address(underTest.DEBT_TOKEN()), address(debtToken));
     assertEq(underTest.DEBT_TOKEN_DECIMALS(), 18);
     assertEq(address(underTest.ORACLE()), mockOracle);
-    assertEq(address(underTest.feeReciever()), owner);
     assertEq(underTest.SLICE_INTERVAL(), 50e18);
-    assertEq(underTest.feeBPS(), 0);
   }
 
   function test_depositDebtTokens_whenNoBorrowers_AccountingCorrect()
