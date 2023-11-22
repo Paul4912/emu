@@ -25,5 +25,5 @@ interface EEmu {
     uint256 collateralRemoved
   );
   event UserLiquidation(address indexed user, uint256 indexed slice);
-  event ClaimBonusAndFees(address indexed user, uint256 indexed slice);
+  event BonusCollateralClaimed(address indexed user, uint256 indexed slice);
 }

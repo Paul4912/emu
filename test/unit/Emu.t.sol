@@ -26,7 +26,7 @@ contract EmuTest is BaseTest, EEmu {
     debtToken = new MockERC20("debtToken", "USDC", 18);
     collateralToken = new MockERC20("collateralToken", "ETH", 18);
     underTest =
-    new Emu(address(collateralToken), address(debtToken), address(mockOracle), owner, 50e18, 0);
+    new Emu(address(collateralToken), address(debtToken), 0, address(mockOracle), owner, 50e18, 0);
 
     _mintInitialTokens();
     _createInitialSlices();
@@ -85,7 +85,7 @@ contract EmuTest is BaseTest, EEmu {
 
     skip(secondsInYear);
 
-    underTest.repayAll(currentSlice, collateralDepositAmount);
+    underTest.repayAll(currentSlice);
 
     vm.startPrank(lenderA);
 
