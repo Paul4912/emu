@@ -9,7 +9,7 @@ import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
-contract Emu is IEmu, Ownable {
+abstract contract BaseEmu is IEmu, Ownable {
   using SafeERC20 for ERC20;
 
   uint256 internal constant RAY = 10 ** 27;
@@ -26,13 +26,13 @@ contract Emu is IEmu, Ownable {
   AggregatorV2V3Interface public immutable ORACLE;
 
   uint256[] public createdSlices;
-  mapping(uint256 price => SliceData sliceData) private slices; // uses whatever decimals oracle uses
-  mapping(uint256 slice => mapping(uint256 epoch => uint256 data)) private claimableData;
-  mapping(address user => mapping(uint256 slice => UserLendingData data)) private
+  mapping(uint256 price => SliceData sliceData) internal slices; // uses whatever decimals oracle uses
+  mapping(uint256 slice => mapping(uint256 epoch => uint256 data)) internal claimableData;
+  mapping(address user => mapping(uint256 slice => UserLendingData data)) internal
     userLendingData;
-  mapping(address user => mapping(uint256 slice => UserBorrowingData data)) private
+  mapping(address user => mapping(uint256 slice => UserBorrowingData data)) internal
     userBorrowingData;
-  mapping(uint256 slice => uint256 totalFees) private heldLiquidationFee;
+  mapping(uint256 slice => uint256 totalFees) internal heldLiquidationFee;
 
   constructor(
     address _collateralToken,
@@ -50,14 +50,17 @@ contract Emu is IEmu, Ownable {
     SLICE_INTERVAL = _sliceInterval;
   }
 
-  function depositDebtTokens(uint256 _slice, uint256 _amount) external {
+  function _depositDebtTokens(address _user, uint256 _slice, uint256 _amount)
+    internal
+    virtual
+  {
     _checkSliceExists(_slice);
     _accureInterest(_slice);
 
     SliceData memory cachedSliceData = slices[_slice];
-    UserLendingData storage userData = userLendingData[msg.sender][_slice];
+    UserLendingData storage userData = userLendingData[_user][_slice];
 
-    _updateClaimableDetails(msg.sender, _slice, userData.epoch);
+    _updateClaimableDetails(_user, _slice, userData.epoch);
 
     if (userData.epoch < cachedSliceData.depositEpoch) {
       userData.baseAmount = 0;
@@ -69,20 +72,23 @@ contract Emu is IEmu, Ownable {
     slices[_slice].totalBaseDeposit += baseAmount;
 
     if (_amount > 0) {
-      DEBT_TOKEN.safeTransferFrom(msg.sender, address(this), _amount);
+      DEBT_TOKEN.safeTransferFrom(_user, address(this), _amount);
     }
 
-    emit LendDebtTokens(msg.sender, _slice, _amount);
+    emit LendDebtTokens(_user, _slice, _amount);
   }
 
-  function withdrawDebtTokens(uint256 _slice, uint256 _amount) external {
+  function _withdrawDebtTokens(address _user, uint256 _slice, uint256 _amount)
+    internal
+    virtual
+  {
     _checkSliceExists(_slice);
     _accureInterest(_slice);
 
     SliceData memory cachedSliceData = slices[_slice];
-    UserLendingData storage userData = userLendingData[msg.sender][_slice];
+    UserLendingData storage userData = userLendingData[_user][_slice];
 
-    _updateClaimableDetails(msg.sender, _slice, userData.epoch);
+    _updateClaimableDetails(_user, _slice, userData.epoch);
 
     if (userData.epoch < cachedSliceData.depositEpoch) {
       userData.baseAmount = 0;
@@ -103,19 +109,22 @@ contract Emu is IEmu, Ownable {
     slices[_slice].totalBaseDeposit -= baseAmount;
 
     if (_amount > 0) {
-      DEBT_TOKEN.safeTransfer(msg.sender, _amount);
+      DEBT_TOKEN.safeTransfer(_user, _amount);
     }
 
-    emit WithdrawDebtTokens(msg.sender, _slice, _amount);
+    emit WithdrawDebtTokens(_user, _slice, _amount);
   }
 
-  function borrow(uint256 _slice, uint256 _borrowAmount, uint256 _addedCollateral)
-    external
-  {
+  function _borrow(
+    address _user,
+    uint256 _slice,
+    uint256 _borrowAmount,
+    uint256 _addedCollateral
+  ) internal virtual {
     _checkSliceExists(_slice);
     _accureInterest(_slice);
 
-    UserBorrowingData storage userData = userBorrowingData[msg.sender][_slice];
+    UserBorrowingData storage userData = userBorrowingData[_user][_slice];
     SliceData storage sliceData = slices[_slice];
     (uint256 currentPrice, uint8 decimals) = _getCurrentPrice();
     uint256 debtIndex = slices[_slice].debtIndex;
@@ -127,7 +136,7 @@ contract Emu is IEmu, Ownable {
     userData.collateralDeposit += _addedCollateral;
     sliceData.totalCollateralDeposit += _addedCollateral;
 
-    COLLATERAL_TOKEN.safeTransferFrom(msg.sender, address(this), _addedCollateral);
+    COLLATERAL_TOKEN.safeTransferFrom(_user, address(this), _addedCollateral);
 
     if (userData.baseAmount == 0) {
       heldLiquidationFee[_slice] += LIQUIDATION_FEE;
@@ -155,16 +164,16 @@ contract Emu is IEmu, Ownable {
       revert InsufficientUnlentLiquidity();
     }
 
-    DEBT_TOKEN.safeTransfer(msg.sender, _borrowAmount);
+    DEBT_TOKEN.safeTransfer(_user, _borrowAmount);
 
-    emit Borrow(msg.sender, _slice, _borrowAmount, _addedCollateral);
+    emit Borrow(_user, _slice, _borrowAmount, _addedCollateral);
   }
 
-  function repayAll(uint256 _slice) public {
+  function _repayAll(address _user, uint256 _slice) internal virtual {
     _checkSliceExists(_slice);
     _accureInterest(_slice);
 
-    UserBorrowingData storage userData = userBorrowingData[msg.sender][_slice];
+    UserBorrowingData storage userData = userBorrowingData[_user][_slice];
     SliceData storage sliceData = slices[_slice];
 
     uint256 baseRepayAmount = userData.baseAmount;
@@ -172,7 +181,7 @@ contract Emu is IEmu, Ownable {
     sliceData.totalBaseDebt -= baseRepayAmount;
 
     uint256 nominalRepayAmount = _toNominal(baseRepayAmount, slices[_slice].debtIndex);
-    DEBT_TOKEN.safeTransferFrom(msg.sender, address(this), nominalRepayAmount);
+    DEBT_TOKEN.safeTransferFrom(_user, address(this), nominalRepayAmount);
 
     uint256 collateralToWithdraw = userData.collateralDeposit;
     userData.collateralDeposit = 0;
@@ -180,32 +189,35 @@ contract Emu is IEmu, Ownable {
 
     heldLiquidationFee[_slice] -= LIQUIDATION_FEE;
 
-    COLLATERAL_TOKEN.safeTransfer(msg.sender, collateralToWithdraw);
+    COLLATERAL_TOKEN.safeTransfer(_user, collateralToWithdraw);
 
-    emit Repay(msg.sender, _slice, nominalRepayAmount, collateralToWithdraw);
+    emit Repay(_user, _slice, nominalRepayAmount, collateralToWithdraw);
   }
 
-  function repay(uint256 _slice, uint256 _repayAmount, uint256 _removeCollateral)
-    external
-  {
+  function _repay(
+    address _user,
+    uint256 _slice,
+    uint256 _repayAmount,
+    uint256 _removeCollateral
+  ) internal virtual {
     _checkSliceExists(_slice);
     _accureInterest(_slice);
 
-    UserBorrowingData storage userData = userBorrowingData[msg.sender][_slice];
+    UserBorrowingData storage userData = userBorrowingData[_user][_slice];
     SliceData storage sliceData = slices[_slice];
     (uint256 currentPrice, uint256 decimals) = _getCurrentPrice();
     uint256 debtIndex = slices[_slice].debtIndex;
 
     uint256 baseRepayAmount = _toBase(_repayAmount, debtIndex);
     if (baseRepayAmount > userData.baseAmount) {
-      repayAll(_slice);
+      _repayAll(_user, _slice);
       return;
     } else {
       userData.baseAmount -= baseRepayAmount;
       sliceData.totalBaseDebt -= baseRepayAmount;
     }
 
-    DEBT_TOKEN.safeTransferFrom(msg.sender, address(this), _repayAmount);
+    DEBT_TOKEN.safeTransferFrom(_user, address(this), _repayAmount);
 
     userData.collateralDeposit -= _removeCollateral;
     sliceData.totalCollateralDeposit -= _removeCollateral;
@@ -221,12 +233,12 @@ contract Emu is IEmu, Ownable {
       revert PositionIsLiquidatable();
     }
 
-    COLLATERAL_TOKEN.safeTransfer(msg.sender, _removeCollateral);
+    COLLATERAL_TOKEN.safeTransfer(_user, _removeCollateral);
 
-    emit Repay(msg.sender, _slice, _repayAmount, _removeCollateral);
+    emit Repay(_user, _slice, _repayAmount, _removeCollateral);
   }
 
-  function liquidateUser(address _user, uint256 _slice) external {
+  function _liquidateUser(address _user, uint256 _slice) internal virtual {
     _checkSliceExists(_slice);
     _accureInterest(_slice);
 
@@ -274,20 +286,20 @@ contract Emu is IEmu, Ownable {
     emit UserLiquidation(_user, _slice);
   }
 
-  function ClaimBonusCollateral(uint256 _slice) external {
+  function _claimBonusCollateral(address _user, uint256 _slice) internal virtual {
     _checkSliceExists(_slice);
 
-    UserLendingData storage userData = userLendingData[msg.sender][_slice];
-    _updateClaimableDetails(msg.sender, _slice, userData.epoch);
+    UserLendingData storage userData = userLendingData[_user][_slice];
+    _updateClaimableDetails(_user, _slice, userData.epoch);
 
     uint256 amountCollateralToTransfer = userData.claimableCollateralAmount;
     userData.claimableCollateralAmount = 0;
 
     if (amountCollateralToTransfer > 0) {
-      COLLATERAL_TOKEN.safeTransfer(msg.sender, amountCollateralToTransfer);
+      COLLATERAL_TOKEN.safeTransfer(_user, amountCollateralToTransfer);
     }
 
-    emit BonusCollateralClaimed(msg.sender, _slice);
+    emit BonusCollateralClaimed(_user, _slice);
   }
 
   function createSlice(uint256 _price) external {
