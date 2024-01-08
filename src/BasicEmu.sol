@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import { BaseEmu } from "./BaseEmu.sol";
 
-contract StandardEmu is BaseEmu {
+contract BasicEmu is BaseEmu {
   constructor(
     address _collateralToken,
     address _debtToken,

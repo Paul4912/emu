@@ -2,7 +2,7 @@ pragma solidity ^0.8.17;
 
 import "test/base/BaseTest.t.sol";
 import "forge-std/console.sol";
-import { StandardEmu } from "src/StandardEmu.sol";
+import { BasicEmu } from "src/BasicEmu.sol";
 import { EEmu } from "src/interface/EEmu.sol";
 import { AggregatorV2V3Interface } from "src/interface/AggregatorV2V3Interface.sol";
 import { MockERC20 } from "test/mock/contract/MockERC20.sol";
@@ -20,13 +20,13 @@ contract EmuTest is BaseTest, EEmu {
   MockERC20 private debtToken;
   MockERC20 private collateralToken;
 
-  StandardEmu private underTest;
+  BasicEmu private underTest;
 
   function setUp() external prankAs(owner) {
     debtToken = new MockERC20("debtToken", "USDC", 18);
     collateralToken = new MockERC20("collateralToken", "ETH", 18);
     underTest =
-    new StandardEmu(address(collateralToken), address(debtToken), 0, address(mockOracle), 50e18);
+    new BasicEmu(address(collateralToken), address(debtToken), 0, address(mockOracle), 50e18);
 
     _mintInitialTokens();
     _createInitialSlices();
