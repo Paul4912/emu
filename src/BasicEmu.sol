@@ -43,4 +43,8 @@ contract BasicEmu is BaseEmu {
   function claimBonusCollateral(uint256 _slice) external {
     _claimBonusCollateral(msg.sender, _slice);
   }
+
+  function createSlice(uint256 _price) external {
+    _createSlice(_price);
+  }
 }

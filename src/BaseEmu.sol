@@ -3,13 +3,13 @@ pragma solidity ^0.8.20;
 
 import { FullMath } from "./libraries/FullMath.sol";
 import { SliceData, UserLendingData, UserBorrowingData } from "./model/EmuModels.sol";
-import { IEmu } from "./interface/IEmu.sol";
+import { IBasicEmu } from "./interface/IBasicEmu.sol";
 import { AggregatorV2V3Interface } from "./interface/AggregatorV2V3Interface.sol";
 import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
-abstract contract BaseEmu is IEmu, Ownable {
+abstract contract BaseEmu is IBasicEmu, Ownable {
   using SafeERC20 for ERC20;
 
   uint256 internal constant RAY = 10 ** 27;
@@ -302,7 +302,7 @@ abstract contract BaseEmu is IEmu, Ownable {
     emit BonusCollateralClaimed(_user, _slice);
   }
 
-  function createSlice(uint256 _price) external {
+  function _createSlice(uint256 _price) internal virtual {
     if (_price % SLICE_INTERVAL > 0) {
       revert InvalidSlicePosition();
     }
@@ -510,6 +510,10 @@ abstract contract BaseEmu is IEmu, Ownable {
       return true;
     }
     return false;
+  }
+
+  function getExistingSlices() external view returns (uint256[] memory) {
+    return createdSlices;
   }
 
   function _checkSliceExists(uint256 _slice) internal view {

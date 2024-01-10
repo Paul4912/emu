@@ -3,11 +3,11 @@ pragma solidity ^0.8.17;
 import "test/base/BaseTest.t.sol";
 import "forge-std/console.sol";
 import { BasicEmu } from "src/BasicEmu.sol";
-import { EEmu } from "src/interface/EEmu.sol";
+import { EBasicEmu } from "src/interface/EBasicEmu.sol";
 import { AggregatorV2V3Interface } from "src/interface/AggregatorV2V3Interface.sol";
 import { MockERC20 } from "test/mock/contract/MockERC20.sol";
 
-contract EmuTest is BaseTest, EEmu {
+contract EmuTest is BaseTest, EBasicEmu {
   uint256 internal constant secondsInYear = 31_536_000;
 
   address private owner = generateAddress("Owner", false);
